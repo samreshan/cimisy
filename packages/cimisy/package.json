@@ -79,7 +79,7 @@
     "@clack/prompts": "^1.7.0",
     "@octokit/auth-app": "^7.1.0",
     "@octokit/rest": "^21.0.0",
-    "jose": "^5.9.0",
+    "jose": "^6.2.3",
     "mdast-util-mdx": "^3.0.0",
     "mdast-util-to-markdown": "^2.1.0",
     "mdast-util-to-string": "^4.0.0",
