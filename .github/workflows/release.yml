@@ -44,6 +44,12 @@ jobs:
       - name: Ensure a recent npm for OIDC trusted publishing
         run: npm install -g npm@latest
 
+      # dist/ is gitignored and the example apps import cimisy via its
+      # subpath exports (cimisy/next, cimisy/config, ...), which resolve to
+      # ./dist/*. Build before typecheck so those imports resolve.
+      - name: Build
+        run: pnpm run build
+
       - name: Lint / typecheck / test
         run: |
           pnpm run lint
