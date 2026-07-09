@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 import type { AdminManifest, BlockTypeManifest, CollectionManifest, FieldManifest } from "../next/manifest.js";
+import { ADMIN_THEME_CSS } from "./admin-theme.js";
 
 interface BlockNodeLike {
   type: string;
@@ -57,24 +58,35 @@ export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminApp
     };
   }, [apiBasePath]);
 
-  if (me === null) return <p>Loading…</p>;
-  if (!me.authenticated) return <SignInGate apiBasePath={apiBasePath} />;
-
   return (
-    <div>
-      <AuthBar user={me.user} role={me.role} apiBasePath={apiBasePath} />
-      <AdminRoutes manifest={manifest} segments={segments} basePath={basePath} apiBasePath={apiBasePath} />
+    <div className="cimisy-root">
+      {/* dangerouslySetInnerHTML, not a text child: <style> is RAWTEXT in HTML parsing (like
+          <script>), so the browser never decodes entities in it, but React's default text-child
+          rendering HTML-escapes quotes regardless — causing a server/client hydration mismatch
+          the moment the CSS contains a quote character (e.g. in font-family). This bypasses that
+          escaping entirely, matching how the browser actually parses the tag. */}
+      <style dangerouslySetInnerHTML={{ __html: ADMIN_THEME_CSS }} />
+      {me === null ? (
+        <p className="cimisy-muted">Loading…</p>
+      ) : !me.authenticated ? (
+        <SignInGate apiBasePath={apiBasePath} />
+      ) : (
+        <>
+          <AuthBar user={me.user} role={me.role} apiBasePath={apiBasePath} />
+          <AdminRoutes manifest={manifest} segments={segments} basePath={basePath} apiBasePath={apiBasePath} />
+        </>
+      )}
     </div>
   );
 }
 
 function SignInGate({ apiBasePath }: { apiBasePath: string }) {
   return (
-    <div>
-      <h1>cimisy admin</h1>
-      <p>
-        <a href={`${apiBasePath}/auth/login`}>Sign in with GitHub &rarr;</a>
-      </p>
+    <div className="cimisy-signin">
+      <h1 className="cimisy-heading">cimisy admin</h1>
+      <a className="cimisy-btn cimisy-btn-primary" href={`${apiBasePath}/auth/login`}>
+        Sign in with GitHub &rarr;
+      </a>
     </div>
   );
 }
@@ -86,13 +98,15 @@ function AuthBar({ user, role, apiBasePath }: { user: MeResponse["user"]; role?:
   }
   if (!user) return null;
   return (
-    <p style={{ fontSize: "0.85em", color: "#666" }}>
-      Signed in as {user.name}
-      {role && ` (${role})`} &middot;{" "}
-      <button type="button" onClick={handleLogout} style={{ font: "inherit", padding: 0 }}>
+    <div className="cimisy-topbar">
+      <span>
+        Signed in as {user.name}
+        {role && ` (${role})`}
+      </span>
+      <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={handleLogout}>
         Sign out
       </button>
-    </p>
+    </div>
   );
 }
 
@@ -122,11 +136,13 @@ function AdminRoutes({ manifest, segments, basePath, apiBasePath }: AdminAppProp
 function CollectionList({ manifest, basePath }: { manifest: AdminManifest; basePath: string }) {
   return (
     <div>
-      <h1>cimisy admin</h1>
-      <ul>
+      <h1 className="cimisy-heading">cimisy admin</h1>
+      <ul className="cimisy-list">
         {manifest.collections.map((c) => (
           <li key={c.name}>
-            <a href={`${basePath}/${c.name}`}>{c.label}</a>
+            <a className="cimisy-card" href={`${basePath}/${c.name}`}>
+              {c.label}
+            </a>
           </li>
         ))}
       </ul>
@@ -159,27 +175,29 @@ function EntryList({
 
   return (
     <div>
-      <p>
-        <a href={basePath}>&larr; Collections</a>
-      </p>
-      <h1>{collection.label}</h1>
-      <p>
-        <a href={`${basePath}/${collection.name}/new`}>+ New</a>
-      </p>
+      <a className="cimisy-crumb cimisy-link" href={basePath}>
+        &larr; Collections
+      </a>
+      <h1 className="cimisy-heading">{collection.label}</h1>
+      <a className="cimisy-btn cimisy-btn-primary" href={`${basePath}/${collection.name}/new`} style={{ marginBottom: 20 }}>
+        + New
+      </a>
       {entries === null ? (
-        <p>Loading…</p>
+        <p className="cimisy-muted">Loading…</p>
       ) : entries.length === 0 ? (
-        <p>No entries yet.</p>
+        <p className="cimisy-empty">No entries yet.</p>
       ) : (
-        <ul>
+        <ul className="cimisy-list" style={{ marginTop: 20 }}>
           {entries.map((entry) =>
             entry.error ? (
-              <li key={entry.slug} style={{ color: "crimson" }}>
-                {entry.slug} — failed to parse: {entry.error}
+              <li key={entry.slug}>
+                <div className="cimisy-card cimisy-card-error">
+                  {entry.slug} — failed to parse: {entry.error}
+                </div>
               </li>
             ) : (
               <li key={entry.slug}>
-                <a href={`${basePath}/${collection.name}/${entry.slug}`}>
+                <a className="cimisy-card" href={`${basePath}/${collection.name}/${entry.slug}`}>
                   {String(entry.values[collection.slugField] ?? entry.slug)}
                 </a>
               </li>
@@ -239,24 +257,26 @@ function EntryForm({
     router.refresh();
   }
 
-  if (loading) return <p>Loading…</p>;
+  if (loading) return <p className="cimisy-muted">Loading…</p>;
 
   return (
     <div>
       <form onSubmit={handleSubmit}>
-        <p>
-          <a href={`${basePath}/${collection.name}`}>&larr; {collection.label}</a>
-        </p>
-        <h1>{slug ?? "New entry"}</h1>
+        <a className="cimisy-crumb cimisy-link" href={`${basePath}/${collection.name}`}>
+          &larr; {collection.label}
+        </a>
+        <h1 className="cimisy-heading">{slug ?? "New entry"}</h1>
         {slug && collection.previewPath && (
           <p>
-            <a href={buildPreviewUrl(apiBasePath, collection.name, slug, collection.previewPath)}>Preview &rarr;</a>
+            <a className="cimisy-link" href={buildPreviewUrl(apiBasePath, collection.name, slug, collection.previewPath)}>
+              Preview &rarr;
+            </a>
           </p>
         )}
-        {error && <p style={{ color: "crimson" }}>{error}</p>}
-        {publishResult?.status === "direct" && <p style={{ color: "seagreen" }}>Published directly.</p>}
+        {error && <p className="cimisy-banner cimisy-banner-danger">{error}</p>}
+        {publishResult?.status === "direct" && <p className="cimisy-banner cimisy-banner-success">Published directly.</p>}
         {publishResult?.status === "draft" && (
-          <p style={{ color: "darkorange" }}>
+          <p className="cimisy-banner cimisy-banner-warning">
             Saved as a draft on branch <code>{publishResult.branch}</code> —{" "}
             <a href={publishResult.pullRequestUrl} target="_blank" rel="noreferrer">
               view pull request &rarr;
@@ -271,7 +291,9 @@ function EntryForm({
             onChange={(v) => setValues((prev) => ({ ...prev, [field.name]: v }))}
           />
         ))}
-        <button type="submit">Save</button>
+        <button type="submit" className="cimisy-btn cimisy-btn-primary">
+          Save
+        </button>
       </form>
       {slug && <HistoryPanel collection={collection} slug={slug} apiBasePath={apiBasePath} />}
     </div>
@@ -307,19 +329,19 @@ function HistoryPanel({ collection, slug, apiBasePath }: { collection: Collectio
   if (!state?.supported) return null;
 
   return (
-    <div style={{ marginTop: 24, borderTop: "1px solid #eee", paddingTop: 12 }}>
-      <h2 style={{ fontSize: "1em" }}>History</h2>
+    <div className="cimisy-panel">
+      <h2 className="cimisy-subheading">History</h2>
       {state.history.length === 0 ? (
-        <p style={{ color: "#888" }}>No history yet.</p>
+        <p className="cimisy-muted">No history yet.</p>
       ) : (
-        <ul style={{ listStyle: "none", padding: 0 }}>
+        <div>
           {state.history.map((entry) => (
-            <li key={entry.version} style={{ fontSize: "0.85em", color: "#666", marginBottom: 6 }}>
+            <div key={entry.version} className="cimisy-history-item">
               <code>{entry.version.slice(0, 7)}</code> {entry.message} — {entry.author.name},{" "}
               {new Date(entry.date).toLocaleString()}
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );
@@ -340,11 +362,13 @@ function FieldInput({
   if (field.kind === "date") {
     const dateValue = typeof value === "string" ? value.slice(0, 10) : "";
     return (
-      <div>
-        <label htmlFor={field.name}>{field.label}</label>
-        <br />
+      <div className="cimisy-field">
+        <label className="cimisy-label" htmlFor={field.name}>
+          {field.label}
+        </label>
         <input
           id={field.name}
+          className="cimisy-input"
           type="date"
           value={dateValue}
           onChange={(e) => onChange(e.target.value ? new Date(e.target.value).toISOString() : "")}
@@ -353,11 +377,13 @@ function FieldInput({
     );
   }
   return (
-    <div>
-      <label htmlFor={field.name}>{field.label}</label>
-      <br />
+    <div className="cimisy-field">
+      <label className="cimisy-label" htmlFor={field.name}>
+        {field.label}
+      </label>
       <input
         id={field.name}
+        className="cimisy-input"
         type="text"
         value={typeof value === "string" ? value : ""}
         onChange={(e) => onChange(e.target.value)}
@@ -435,32 +461,29 @@ function BlockEditor({
   }
 
   return (
-    <div>
-      <label>{field.label}</label>
-      <div style={{ border: "1px solid #ddd", borderRadius: 4, padding: 8, marginTop: 4 }}>
-        {blocks.length === 0 && <p style={{ color: "#888", margin: 0 }}>No blocks yet.</p>}
+    <div className="cimisy-field">
+      <label className="cimisy-label">{field.label}</label>
+      <div className="cimisy-block-list">
+        {blocks.length === 0 && <p className="cimisy-muted" style={{ margin: 0 }}>No blocks yet.</p>}
         {blocks.map((block, index) => {
           const typeDef = blockTypes.find((t) => t.name === block.type);
           return (
-            <div key={block.id} style={{ border: "1px solid #eee", borderRadius: 4, padding: 8, marginBottom: 8 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  fontSize: "0.8em",
-                  color: "#888",
-                  marginBottom: 4,
-                }}
-              >
+            <div key={block.id} className="cimisy-block">
+              <div className="cimisy-block-header">
                 <span>{typeDef?.label ?? block.type}</span>
-                <span>
-                  <button type="button" onClick={() => moveBlock(index, -1)} disabled={index === 0}>
+                <span className="cimisy-block-controls">
+                  <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={() => moveBlock(index, -1)} disabled={index === 0}>
                     &uarr;
-                  </button>{" "}
-                  <button type="button" onClick={() => moveBlock(index, 1)} disabled={index === blocks.length - 1}>
+                  </button>
+                  <button
+                    type="button"
+                    className="cimisy-btn cimisy-btn-ghost"
+                    onClick={() => moveBlock(index, 1)}
+                    disabled={index === blocks.length - 1}
+                  >
                     &darr;
-                  </button>{" "}
-                  <button type="button" onClick={() => removeBlock(index)}>
+                  </button>
+                  <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={() => removeBlock(index)}>
                     Remove
                   </button>
                 </span>
@@ -468,13 +491,17 @@ function BlockEditor({
               {typeDef ? (
                 <BlockPropsEditor typeDef={typeDef} props={block.props} onChange={(props) => updateBlockProps(index, props)} />
               ) : (
-                <p style={{ color: "crimson" }}>Unknown block type &quot;{block.type}&quot;</p>
+                <p className="cimisy-banner cimisy-banner-danger" style={{ margin: 0 }}>
+                  Unknown block type &quot;{block.type}&quot;
+                </p>
               )}
             </div>
           );
         })}
       </div>
       <select
+        className="cimisy-select"
+        style={{ marginTop: 10 }}
         value=""
         onChange={(e) => {
           if (e.target.value) addBlock(e.target.value);
@@ -509,7 +536,7 @@ function BlockPropsEditor({
     const levels = (uiOptions.levels as number[] | undefined) ?? [1, 2, 3, 4, 5, 6];
     return (
       <div>
-        <select value={String(props.level ?? levels[0])} onChange={(e) => set("level", Number(e.target.value))}>
+        <select className="cimisy-select" style={{ width: "auto", marginBottom: 6 }} value={String(props.level ?? levels[0])} onChange={(e) => set("level", Number(e.target.value))}>
           {levels.map((l) => (
             <option key={l} value={l}>
               H{l}
@@ -517,10 +544,10 @@ function BlockPropsEditor({
           ))}
         </select>
         <input
+          className="cimisy-input"
           type="text"
           value={typeof props.text === "string" ? props.text : ""}
           onChange={(e) => set("text", e.target.value)}
-          style={{ width: "100%", marginTop: 4 }}
         />
       </div>
     );
@@ -530,7 +557,12 @@ function BlockPropsEditor({
     return (
       <div>
         {languages ? (
-          <select value={String(props.language ?? languages[0])} onChange={(e) => set("language", e.target.value)}>
+          <select
+            className="cimisy-select"
+            style={{ width: "auto", marginBottom: 6 }}
+            value={String(props.language ?? languages[0])}
+            onChange={(e) => set("language", e.target.value)}
+          >
             {languages.map((l) => (
               <option key={l} value={l}>
                 {l}
@@ -539,16 +571,17 @@ function BlockPropsEditor({
           </select>
         ) : (
           <input
+            className="cimisy-input"
             type="text"
             placeholder="language"
             value={typeof props.language === "string" ? props.language : ""}
             onChange={(e) => set("language", e.target.value)}
+            style={{ marginBottom: 6 }}
           />
         )}
-        <br />
         <textarea
+          className="cimisy-textarea cimisy-textarea-mono"
           rows={6}
-          style={{ width: "100%", marginTop: 4, fontFamily: "monospace" }}
           value={typeof props.code === "string" ? props.code : ""}
           onChange={(e) => set("code", e.target.value)}
         />
@@ -559,18 +592,19 @@ function BlockPropsEditor({
     return (
       <div>
         <input
+          className="cimisy-input"
           type="text"
           placeholder="Image src"
           value={typeof props.src === "string" ? props.src : ""}
           onChange={(e) => set("src", e.target.value)}
-          style={{ width: "100%" }}
+          style={{ marginBottom: 6 }}
         />
         <input
+          className="cimisy-input"
           type="text"
           placeholder="Alt text"
           value={typeof props.alt === "string" ? props.alt : ""}
           onChange={(e) => set("alt", e.target.value)}
-          style={{ width: "100%", marginTop: 4 }}
         />
       </div>
     );
@@ -579,7 +613,7 @@ function BlockPropsEditor({
     const tones = (uiOptions.tones as string[] | undefined) ?? ["info"];
     return (
       <div>
-        <select value={String(props.tone ?? tones[0])} onChange={(e) => set("tone", e.target.value)}>
+        <select className="cimisy-select" style={{ width: "auto", marginBottom: 6 }} value={String(props.tone ?? tones[0])} onChange={(e) => set("tone", e.target.value)}>
           {tones.map((t) => (
             <option key={t} value={t}>
               {t}
@@ -587,8 +621,8 @@ function BlockPropsEditor({
           ))}
         </select>
         <textarea
+          className="cimisy-textarea"
           rows={3}
-          style={{ width: "100%", marginTop: 4 }}
           value={typeof props.text === "string" ? props.text : ""}
           onChange={(e) => set("text", e.target.value)}
         />
@@ -598,8 +632,8 @@ function BlockPropsEditor({
   // paragraph (default fallback for any other plain-text block kind)
   return (
     <textarea
+      className="cimisy-textarea"
       rows={4}
-      style={{ width: "100%" }}
       value={typeof props.text === "string" ? props.text : ""}
       onChange={(e) => set("text", e.target.value)}
     />
