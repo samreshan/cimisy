@@ -1,0 +1,102 @@
+{
+  "name": "cimisy",
+  "version": "1.0.0",
+  "description": "A git-based, security-first CMS that installs directly into an existing Next.js app.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samreshan/cimisy.git",
+    "directory": "packages/cimisy"
+  },
+  "homepage": "https://github.com/samreshan/cimisy#readme",
+  "bugs": {
+    "url": "https://github.com/samreshan/cimisy/issues"
+  },
+  "keywords": [
+    "cms",
+    "git",
+    "github",
+    "mdx",
+    "next",
+    "nextjs",
+    "content-management"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "exports": {
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "import": "./dist/storage/index.js"
+    },
+    "./adapters/local": {
+      "types": "./dist/storage/local.d.ts",
+      "import": "./dist/storage/local.js"
+    },
+    "./adapters/github": {
+      "types": "./dist/adapters/github/index.d.ts",
+      "import": "./dist/adapters/github/index.js"
+    },
+    "./next": {
+      "types": "./dist/next/index.d.ts",
+      "import": "./dist/next/index.js"
+    },
+    "./render": {
+      "types": "./dist/react/render-blocks.d.ts",
+      "import": "./dist/react/render-blocks.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "next": ">=14.0.0",
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "@octokit/auth-app": "^7.1.0",
+    "@octokit/rest": "^21.0.0",
+    "jose": "^5.9.0",
+    "mdast-util-mdx": "^3.0.0",
+    "mdast-util-to-markdown": "^2.1.0",
+    "mdast-util-to-string": "^4.0.0",
+    "remark-mdx": "^3.0.0",
+    "remark-parse": "^11.0.0",
+    "server-only": "^0.0.1",
+    "unified": "^11.0.0",
+    "yaml": "^2.5.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/mdast": "^4.0.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "eslint": "^9.9.0",
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "tsup": "^8.2.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^2.0.0"
+  }
+}

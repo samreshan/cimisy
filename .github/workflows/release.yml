@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  # Required for npm's OIDC "trusted publishing" (no long-lived NPM_TOKEN).
+  # Configure the trusted publisher for this package on npmjs.com, pointing
+  # at this repo + this workflow file, before the first automated publish.
+  id-token: write
+
+jobs:
+  release:
+    name: Version or publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # OIDC trusted publishing needs a recent npm CLI (>=11.5.1); Node 20's
+      # bundled npm predates that, so upgrade it before changesets shells out
+      # to `npm publish` under the hood.
+      - name: Ensure a recent npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Lint / typecheck / test
+        run: |
+          pnpm run lint
+          pnpm run typecheck
+          pnpm run test
+
+      - name: Version packages or publish to npm
+        uses: changesets/action@v1
+        with:
+          publish: pnpm run release
+          version: pnpm run version-packages
+          commit: "chore: version packages"
+          title: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fallback for registries/setups that haven't configured npm trusted
+          # publishing yet: add an automation-scoped NPM_TOKEN repo secret and
+          # it's picked up automatically. Prefer trusted publishing (above)
+          # when available — it avoids a long-lived publish credential
+          # entirely, which fits a security-first project.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
