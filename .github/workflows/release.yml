@@ -38,11 +38,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # OIDC trusted publishing needs a recent npm CLI (>=11.5.1); Node 20's
-      # bundled npm predates that, so upgrade it before changesets shells out
-      # to `npm publish` under the hood.
+      # OIDC trusted publishing needs a recent npm CLI (>=11.5.1). Pin to the
+      # 11.x line rather than floating @latest: npm 12 changed the `npm
+      # publish --json` error-object shape, which crashes @changesets/cli's
+      # (2.31.0, latest stable) already-published detection.
       - name: Ensure a recent npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       # dist/ is gitignored and the example apps import cimisy via its
       # subpath exports (cimisy/next, cimisy/config, ...), which resolve to
