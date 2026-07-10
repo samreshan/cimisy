@@ -42,14 +42,70 @@ export const ADMIN_THEME_CSS = `
   box-sizing: inherit;
 }
 
-.cimisy-topbar {
+.cimisy-nav {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 28px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--cimisy-border);
+  flex-wrap: wrap;
+}
+.cimisy-nav-brand-link {
+  font-weight: 700;
+  font-size: 1.05em;
+  color: var(--cimisy-charcoal);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.cimisy-nav-links {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+.cimisy-nav-link {
+  color: var(--cimisy-charcoal-soft);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9em;
+  padding: 6px 10px;
+  border-radius: var(--cimisy-radius-sm);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.cimisy-nav-link:hover {
+  background: var(--cimisy-bone-soft);
+  color: var(--cimisy-charcoal);
+}
+.cimisy-nav-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 0.85em;
   color: var(--cimisy-charcoal-soft);
+}
+
+.cimisy-badge {
+  display: inline-block;
+  background: var(--cimisy-purple-soft);
+  color: var(--cimisy-purple-dark);
+  font-weight: 650;
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.cimisy-card.cimisy-team-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.cimisy-team-name {
+  font-weight: 600;
 }
 
 .cimisy-crumb {

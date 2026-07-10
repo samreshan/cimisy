@@ -18,5 +18,12 @@ export const deleteEntryBodySchema = z.object({
   baseVersion: z.string().nullable().optional(),
 });
 
+/** `role: null` revokes access (back to pending) rather than deleting the roster entry — see rbac/user-store.ts. */
+export const setUserRoleBodySchema = z.object({
+  githubId: z.string(),
+  role: z.string().nullable(),
+});
+
 export type WriteEntryBody = z.infer<typeof writeEntryBodySchema>;
 export type DeleteEntryBody = z.infer<typeof deleteEntryBodySchema>;
+export type SetUserRoleBody = z.infer<typeof setUserRoleBodySchema>;

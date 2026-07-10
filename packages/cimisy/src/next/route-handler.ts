@@ -4,6 +4,8 @@ import type { z } from "zod";
 import type { CimisyConfig } from "../config/define-config.js";
 import { deleteEntry, listEntries, readEntry, resolveEntrySlug, writeEntry } from "../content/collection-store.js";
 import { ensureDraftBranchAndPr } from "../content/draft-workflow.js";
+import { resolveRole } from "../rbac/resolve-role.js";
+import { readUserRoster, writeUserRoster } from "../rbac/user-store.js";
 import { draftBranchName } from "../shared/branch-name.js";
 import { CimisyError, ConflictError, ForbiddenError, NotFoundError, RateLimitedError, ValidationError } from "../shared/errors.js";
 import { isGithubSource } from "../shared/github-source-shape.js";
@@ -13,7 +15,11 @@ import { DEFAULT_REF, resolveActor } from "./actor.js";
 import { handleCallback, handleLogin, handleLogout } from "./auth-routes.js";
 import { requireSameOrigin } from "./csrf.js";
 import { handlePreviewDisable, handlePreviewEnable } from "./draft-mode.js";
-import { deleteEntryBodySchema, writeEntryBodySchema } from "./request-schemas.js";
+import { deleteEntryBodySchema, setUserRoleBodySchema, writeEntryBodySchema } from "./request-schemas.js";
+import { SESSION_COOKIE_NAME, verifySessionToken } from "./session.js";
+
+/** Not a real content path — RBAC's path-glob matching treats any string the same way, and a "**" rule already matches this, so no changes needed to rbac/glob.ts. */
+const USERS_SENTINEL_PATH = "$users";
 
 function errorResponse(err: unknown): NextResponse {
   if (err instanceof NotFoundError) return NextResponse.json({ error: err.message }, { status: 404 });
@@ -85,16 +91,38 @@ async function enforceWriteRateLimit(cimisyConfig: CimisyConfig, actor: Actor): 
 export function createCimisyHandler(cimisyConfig: CimisyConfig) {
   async function handleAuth(request: NextRequest, action: string | undefined): Promise<NextResponse | null> {
     if (action === "me") {
-      const actor = await resolveActor(request, cimisyConfig);
-      return NextResponse.json(
-        actor ? { authenticated: true, user: actor.author, role: actor.roleName } : { authenticated: false },
-      );
+      // Deliberately does its own session-verify + resolveRole instead of
+      // calling resolveActor: resolveActor throws when there's no
+      // assigned role, but "signed in, no role yet" is the ordinary
+      // state for a brand-new user here — the client needs a pending
+      // response, not a 500.
+      if (!isGithubSource(cimisyConfig.source)) {
+        const actor = await resolveActor(request, cimisyConfig);
+        return NextResponse.json({ authenticated: true, user: actor!.author, role: actor!.roleName, pending: false });
+      }
+      const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+      if (!token) return NextResponse.json({ authenticated: false });
+      const session = await verifySessionToken(token, cimisyConfig.source.sessionSecret);
+      if (!session) return NextResponse.json({ authenticated: false });
+      const resolved = await resolveRole(cimisyConfig, cimisyConfig.source, session.githubLogin, session.githubUserId);
+      return NextResponse.json({
+        authenticated: true,
+        user: {
+          id: session.githubUserId,
+          name: session.name ?? session.githubLogin,
+          email: session.email ?? `${session.githubUserId}+${session.githubLogin}@users.noreply.github.com`,
+        },
+        role: resolved?.roleName ?? null,
+        pending: resolved === null,
+      });
     }
     if (!isGithubSource(cimisyConfig.source)) {
       return NextResponse.json({ error: "Auth routes require the GitHub source." }, { status: 404 });
     }
     if (action === "login") return handleLogin(request, cimisyConfig.source);
-    if (action === "callback") return handleCallback(request, cimisyConfig.source, cimisyConfig.rateLimiter);
+    if (action === "callback") {
+      return handleCallback(request, cimisyConfig.source, cimisyConfig.rateLimiter, cimisyConfig.roleMapping);
+    }
     if (action === "logout") {
       // POST-only so logout can't be triggered by a plain GET (e.g. an
       // <img> tag pointing at this URL from another site).
@@ -242,6 +270,69 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
     }
   }
 
+  /** Admin-only: lists the user roster (see rbac/user-store.ts). Local mode has no roster — 404, same as the auth routes. */
+  async function handleUsersGet(request: NextRequest): Promise<NextResponse> {
+    try {
+      if (!isGithubSource(cimisyConfig.source)) {
+        return NextResponse.json({ error: "User management requires the GitHub source." }, { status: 404 });
+      }
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      actor.requirePermission("manageUsers", USERS_SENTINEL_PATH);
+      const { users } = await readUserRoster(cimisyConfig.source);
+      return NextResponse.json({ users });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  /**
+   * Admin-only: sets (or clears, via `role: null`) one person's role.
+   * Refuses to leave the roster with zero admins — the one hard-coded
+   * safety rail in an otherwise fully config-driven RBAC system, since
+   * "the admin locked themselves out" isn't recoverable without direct
+   * repo access.
+   */
+  async function handleUsersPost(request: NextRequest): Promise<NextResponse> {
+    try {
+      requireSameOrigin(request);
+      if (!isGithubSource(cimisyConfig.source)) {
+        return NextResponse.json({ error: "User management requires the GitHub source." }, { status: 404 });
+      }
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      actor.requirePermission("manageUsers", USERS_SENTINEL_PATH);
+      await enforceWriteRateLimit(cimisyConfig, actor);
+
+      const body = await parseJsonBody(request, setUserRoleBodySchema);
+      const { users, version } = await readUserRoster(cimisyConfig.source, { bypassCache: true });
+      const target = users.find((u) => u.githubId === body.githubId);
+      if (!target) return NextResponse.json({ error: "Unknown user" }, { status: 404 });
+
+      const remainingAdminsWithoutTarget = users.filter((u) => u.role === "admin" && u.githubId !== body.githubId).length;
+      if (target.role === "admin" && body.role !== "admin" && remainingAdminsWithoutTarget === 0) {
+        return NextResponse.json({ error: "Cannot remove the last admin." }, { status: 400 });
+      }
+
+      const now = new Date().toISOString();
+      const updated = users.map((u) =>
+        u.githubId === body.githubId ? { ...u, role: body.role, updatedAt: now, updatedBy: actor.login } : u,
+      );
+      const result = await writeUserRoster(
+        cimisyConfig.source,
+        updated,
+        version,
+        actor.author,
+        `cimisy: set ${target.githubLogin}'s role to ${body.role ?? "(none)"}`,
+        DEFAULT_REF,
+      );
+      if (result.conflict) return NextResponse.json({ error: "Version conflict, please retry" }, { status: 409 });
+      return NextResponse.json({ ok: true, users: updated });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
   // Next 14 passes `params` as a plain object; Next 15 made it a Promise.
   // `await` resolves either form correctly (awaiting a non-thenable value
   // just yields that value), so one handler shape supports both.
@@ -256,6 +347,7 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       }
       if (route[0] === "preview" && route[1] === "enable") return handlePreviewEnable(request, cimisyConfig);
       if (route[0] === "preview" && route[1] === "disable") return handlePreviewDisable(request);
+      if (route[0] === "users") return handleUsersGet(request);
       if (route[3] === "history") return handleHistory(request, { route });
       return handleGet(request, { route });
     },
@@ -265,6 +357,7 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
         const authResponse = await handleAuth(request, route[1]);
         if (authResponse) return authResponse;
       }
+      if (route[0] === "users") return handleUsersPost(request);
       return handlePost(request, { route });
     },
     PUT: async (request: NextRequest, context: { params: RouteParams }) => handlePost(request, await context.params),

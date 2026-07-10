@@ -21,8 +21,22 @@ interface EntrySummaryLike {
 interface MeResponse {
   authenticated: boolean;
   user?: { id: string; name: string; email: string };
-  role?: string;
+  role?: string | null;
+  pending?: boolean;
 }
+
+interface RosterUserLike {
+  githubId: string;
+  githubLogin: string;
+  name: string | null;
+  role: string | null;
+  addedAt: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** Mirrors config/define-config.ts's DEFAULT_ROLES — the assignable role names an admin can grant from the Team screen. A project with fully custom `roles` can still assign anything by name; this list is just the common-case default. */
+const ASSIGNABLE_ROLES = ["admin", "publisher", "editor", "viewer"];
 
 interface PublishResult {
   status: "direct" | "draft";
@@ -70,10 +84,18 @@ export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminApp
         <p className="cimisy-muted">Loading…</p>
       ) : !me.authenticated ? (
         <SignInGate apiBasePath={apiBasePath} />
+      ) : me.pending ? (
+        <PendingGate user={me.user} apiBasePath={apiBasePath} />
       ) : (
         <>
-          <AuthBar user={me.user} role={me.role} apiBasePath={apiBasePath} />
-          <AdminRoutes manifest={manifest} segments={segments} basePath={basePath} apiBasePath={apiBasePath} />
+          <TopNav user={me.user} role={me.role} basePath={basePath} apiBasePath={apiBasePath} />
+          <AdminRoutes
+            manifest={manifest}
+            segments={segments}
+            basePath={basePath}
+            apiBasePath={apiBasePath}
+            role={me.role}
+          />
         </>
       )}
     </div>
@@ -91,30 +113,89 @@ function SignInGate({ apiBasePath }: { apiBasePath: string }) {
   );
 }
 
-function AuthBar({ user, role, apiBasePath }: { user: MeResponse["user"]; role?: string; apiBasePath: string }) {
+/** Shown once a GitHub sign-in has registered a user record but no admin has assigned them a role yet (see rbac/user-store.ts's ensureUserRecord) — a distinct, calm state from "not signed in", not an error. */
+function PendingGate({ user, apiBasePath }: { user: MeResponse["user"]; apiBasePath: string }) {
   async function handleLogout() {
     await fetch(`${apiBasePath}/auth/logout`, { method: "POST" });
     window.location.reload();
   }
-  if (!user) return null;
   return (
-    <div className="cimisy-topbar">
-      <span>
-        Signed in as {user.name}
-        {role && ` (${role})`}
-      </span>
-      <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={handleLogout}>
+    <div className="cimisy-signin">
+      <h1 className="cimisy-heading">Waiting for access</h1>
+      <p className="cimisy-muted">
+        You&apos;re signed in as <strong>{user?.name}</strong>, but no admin has granted you a role yet. Ask an
+        existing admin to add you from the Team screen.
+      </p>
+      <button
+        type="button"
+        className="cimisy-btn cimisy-btn-secondary"
+        onClick={handleLogout}
+        style={{ marginTop: 20 }}
+      >
         Sign out
       </button>
     </div>
   );
 }
 
-function AdminRoutes({ manifest, segments, basePath, apiBasePath }: AdminAppProps) {
+function TopNav({
+  user,
+  role,
+  basePath,
+  apiBasePath,
+}: {
+  user: MeResponse["user"];
+  role?: string | null;
+  basePath: string;
+  apiBasePath: string;
+}) {
+  async function handleLogout() {
+    await fetch(`${apiBasePath}/auth/logout`, { method: "POST" });
+    window.location.reload();
+  }
+  return (
+    <nav className="cimisy-nav">
+      <a className="cimisy-nav-brand-link" href={basePath}>
+        cimisy
+      </a>
+      <div className="cimisy-nav-links">
+        <a className="cimisy-nav-link" href={basePath}>
+          Collections
+        </a>
+        {role === "admin" && (
+          <a className="cimisy-nav-link" href={`${basePath}/team`}>
+            Team
+          </a>
+        )}
+      </div>
+      <div className="cimisy-nav-user">
+        {user && <span>{user.name}</span>}
+        {role && <span className="cimisy-badge">{role}</span>}
+        <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={handleLogout}>
+          Sign out
+        </button>
+      </div>
+    </nav>
+  );
+}
+
+function AdminRoutes({
+  manifest,
+  segments,
+  basePath,
+  apiBasePath,
+  role,
+}: AdminAppProps & { role?: string | null }) {
   const [collectionName, slug] = segments;
 
   if (!collectionName) {
     return <CollectionList manifest={manifest} basePath={basePath} />;
+  }
+  // Reserved before collection-name routing, the same way "new" is reserved
+  // at the slug level below — a project collection literally named "team"
+  // would collide with this, same accepted tradeoff as "new".
+  if (collectionName === "team") {
+    return <TeamPage basePath={basePath} apiBasePath={apiBasePath} isAdmin={role === "admin"} />;
   }
   const collectionDef = manifest.collections.find((c) => c.name === collectionName);
   if (!collectionDef) {
@@ -146,6 +227,101 @@ function CollectionList({ manifest, basePath }: { manifest: AdminManifest; baseP
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Lists every user who has ever signed in (see rbac/user-store.ts) and lets an admin assign/change/revoke their role. The server re-checks admin permission on every GET/POST — `isAdmin` here only decides whether to render the inline "not an admin" notice versus attempting the fetch (which would 403 anyway). */
+function TeamPage({ basePath, apiBasePath, isAdmin }: { basePath: string; apiBasePath: string; isAdmin: boolean }) {
+  const [users, setUsers] = useState<RosterUserLike[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    fetch(`${apiBasePath}/users`)
+      .then(async (res) => {
+        const data = (await res.json()) as { users?: RosterUserLike[]; error?: string };
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(data.error ?? "Failed to load team.");
+          return;
+        }
+        setUsers(data.users ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Failed to load team.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBasePath, isAdmin]);
+
+  async function handleRoleChange(githubId: string, role: string) {
+    setError(null);
+    setSavingId(githubId);
+    const res = await fetch(`${apiBasePath}/users`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ githubId, role: role === "" ? null : role }),
+    });
+    const data = (await res.json()) as { users?: RosterUserLike[]; error?: string };
+    setSavingId(null);
+    if (!res.ok) {
+      setError(data.error ?? "Failed to update role.");
+      return;
+    }
+    setUsers(data.users ?? []);
+  }
+
+  return (
+    <div>
+      <a className="cimisy-crumb cimisy-link" href={basePath}>
+        &larr; Collections
+      </a>
+      <h1 className="cimisy-heading">Team</h1>
+      {!isAdmin ? (
+        <p className="cimisy-banner cimisy-banner-danger">Only admins can manage the team.</p>
+      ) : (
+        <>
+          {error && <p className="cimisy-banner cimisy-banner-danger">{error}</p>}
+          {users === null ? (
+            <p className="cimisy-muted">Loading…</p>
+          ) : users.length === 0 ? (
+            <p className="cimisy-empty">No one has signed in yet.</p>
+          ) : (
+            <ul className="cimisy-list">
+              {users.map((u) => (
+                <li key={u.githubId}>
+                  <div className="cimisy-card cimisy-team-card">
+                    <div>
+                      <div className="cimisy-team-name">{u.name ?? u.githubLogin}</div>
+                      <div className="cimisy-muted" style={{ fontSize: "0.85em" }}>
+                        @{u.githubLogin}
+                      </div>
+                    </div>
+                    <select
+                      className="cimisy-select"
+                      style={{ width: "auto" }}
+                      value={u.role ?? ""}
+                      disabled={savingId === u.githubId}
+                      onChange={(e) => handleRoleChange(u.githubId, e.target.value)}
+                    >
+                      <option value="">— pending —</option>
+                      {ASSIGNABLE_ROLES.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
     </div>
   );
 }

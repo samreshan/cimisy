@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import type { Action, CimisyConfig } from "../config/define-config.js";
 import { requirePermission } from "../rbac/require-permission.js";
 import { resolveRole } from "../rbac/resolve-role.js";
+import { ForbiddenError } from "../shared/errors.js";
 import { isGithubSource } from "../shared/github-source-shape.js";
 import type { ChangeAuthor } from "../storage/types.js";
 import { SESSION_COOKIE_NAME, type SessionPayload, verifySessionToken } from "./session.js";
@@ -29,10 +30,15 @@ export interface Actor {
 /**
  * Resolves identity (who is this) and role (what can they do) together,
  * since role resolution needs the identity's username. Returns null only
- * when there's no valid session at all (→ 401); an authenticated identity
- * with no permitted role throws ForbiddenError from resolveRole itself
- * (→ 403) rather than silently falling back to "no access" here — a
- * misconfigured roleMapping should be loud, not swallowed.
+ * when there's no valid session at all (→ 401). An authenticated identity
+ * with no assigned role (resolveRole returns null — signed in, waiting
+ * for an admin to grant access) throws ForbiddenError here (→ 403); a
+ * role name with no definition in cimisy.config.ts throws from
+ * resolveRole itself — either way, callers of resolveActor get a single
+ * consistent throw-based contract. The one caller that needs the softer
+ * "pending, not an error" distinction is the /auth/me route, which
+ * deliberately does its own session-verify + resolveRole instead of
+ * calling this function (see next/route-handler.ts).
  *
  * Shared by route-handler.ts (the admin API) and draft-mode.ts (the
  * preview-enabling route) — both need the same identity/role resolution,
@@ -55,7 +61,11 @@ export async function resolveActor(request: NextRequest, cimisyConfig: CimisyCon
   const session: SessionPayload | null = await verifySessionToken(token, source.sessionSecret);
   if (!session) return null;
 
-  const { roleName, role } = await resolveRole(cimisyConfig, source, session.githubLogin);
+  const resolved = await resolveRole(cimisyConfig, source, session.githubLogin, session.githubUserId);
+  if (!resolved) {
+    throw new ForbiddenError(`"${session.githubLogin}" is signed in but has not been assigned a role yet.`);
+  }
+  const { roleName, role } = resolved;
   const author: ChangeAuthor = {
     id: session.githubUserId,
     name: session.name ?? session.githubLogin,

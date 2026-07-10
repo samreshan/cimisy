@@ -17,6 +17,8 @@ export interface FakeGithubApi {
   setCollaboratorPermission(username: string, permission: string | null): void;
   /** Resolves the current file state of a branch (for test assertions), by walking its head commit's tree. */
   filesOnBranch(branch: string): Map<string, string>;
+  /** Directly commits a file to the default branch, outside of any adapter call — for seeding fixture state (e.g. a pre-existing .cimisy/users.yaml) before a test exercises the real read/write path. */
+  seedFile(path: string, content: string): void;
   install(): void;
   restore(): void;
 }
@@ -300,6 +302,24 @@ export function createFakeGithubApi(options: {
     setCollaboratorPermission(username, permission) {
       if (permission === null) collaboratorPermissions.delete(username);
       else collaboratorPermissions.set(username, permission);
+    },
+    seedFile(path, content) {
+      const sha = blobSha(content);
+      blobStore.set(sha, content);
+      const headSha = branches.get(defaultBranch)!;
+      const headCommit = commits.get(headSha)!;
+      const baseEntries = trees.get(headCommit.treeSha) ?? [];
+      const newTreeSha = `tree-${treeCounter++}`;
+      trees.set(newTreeSha, [...baseEntries.filter((e) => e.path !== path), { path, sha }]);
+      const newCommitSha = `commit-${commitCounter++}`;
+      commits.set(newCommitSha, {
+        treeSha: newTreeSha,
+        parents: [headSha],
+        message: `seed ${path}`,
+        author: { name: "test", email: "test@example.com", date: new Date().toISOString() },
+        authorId: 0,
+      });
+      branches.set(defaultBranch, newCommitSha);
     },
     install() {
       originalFetch = global.fetch;

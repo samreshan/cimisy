@@ -1,9 +1,12 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { DEFAULT_ROLE_MAPPING } from "../config/define-config.js";
 import { buildAuthorizeUrl, exchangeCodeForIdentity } from "../github/oauth.js";
+import { ensureUserRecord } from "../rbac/user-store.js";
 import { clientIpFromRequest, type RateLimiter } from "../security/rate-limit.js";
 import type { GithubIntegratedSource } from "../shared/github-source-shape.js";
+import { DEFAULT_REF } from "./actor.js";
 import {
   OAUTH_STATE_COOKIE_NAME,
   OAUTH_STATE_COOKIE_OPTIONS,
@@ -29,6 +32,7 @@ export async function handleCallback(
   request: NextRequest,
   source: GithubIntegratedSource,
   rateLimiter?: RateLimiter,
+  roleMapping: Record<string, string> = DEFAULT_ROLE_MAPPING,
 ): Promise<NextResponse> {
   // IP-keyed (not identity-keyed): there's no identity yet at this point
   // in the flow — this is exactly the endpoint an attacker would hammer
@@ -64,6 +68,17 @@ export async function handleCallback(
   } catch {
     return NextResponse.json({ error: "GitHub sign-in failed." }, { status: 401 });
   }
+
+  // The literal "GitHub authentication creates a user" hook: records this
+  // identity in the user roster (pending, unless this is the very first
+  // sign-in ever and they're admin-eligible — see user-store.ts's
+  // ensureUserRecord). Never blocks sign-in on failure.
+  await ensureUserRecord(
+    source,
+    { githubId: identity.id, githubLogin: identity.login, name: identity.name },
+    DEFAULT_REF,
+    roleMapping,
+  );
 
   const sessionToken = await createSessionToken(
     { githubUserId: identity.id, githubLogin: identity.login, name: identity.name, email: identity.email },

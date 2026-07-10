@@ -1,6 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stringify as stringifyYaml } from "yaml";
 import { createFakeGithubApi, type FakeGithubApi } from "../../adapters/github/__tests__/fake-github-api.js";
 import { githubSource } from "../../adapters/github/adapter.js";
 import type { CimisyConfig } from "../../config/define-config.js";
@@ -58,6 +59,25 @@ function req(url: string, init?: ConstructorParameters<typeof NextRequest>[1]): 
   return new NextRequest(new URL(url, "http://localhost:3000"), init);
 }
 
+/** Seeds .cimisy/users.yaml directly — role resolution now goes through the roster, not live collaborator permission (see rbac/resolve-role.ts). */
+function seedRoster(fake: FakeGithubApi, records: Array<{ githubId: string; githubLogin: string; role: string }>): void {
+  const now = new Date(0).toISOString();
+  fake.seedFile(
+    ".cimisy/users.yaml",
+    stringifyYaml(
+      records.map((r) => ({
+        githubId: r.githubId,
+        githubLogin: r.githubLogin,
+        name: r.githubLogin,
+        role: r.role,
+        addedAt: now,
+        updatedAt: now,
+        updatedBy: "test",
+      })),
+    ),
+  );
+}
+
 describe("handlePreviewEnable", () => {
   let fake: FakeGithubApi;
   let cimisyConfig: CimisyConfig;
@@ -79,8 +99,8 @@ describe("handlePreviewEnable", () => {
   });
 
   it("requires collection and slug query params", async () => {
+    seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "admin" }]);
     const cookie = await sessionCookieFor("alice", "1");
-    fake.setCollaboratorPermission("alice", "admin");
     const res = await handlePreviewEnable(req("http://x/api/cimisy/preview/enable", { headers: { cookie } }), cimisyConfig);
     expect(res.status).toBe(400);
   });
@@ -89,10 +109,9 @@ describe("handlePreviewEnable", () => {
     const configWithRestrictedRoles = config({
       ...cimisyConfig,
       roles: { blocked: { directPublish: false, rules: [] } },
-      roleMapping: { admin: "blocked" },
     });
+    seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "blocked" }]);
     const cookie = await sessionCookieFor("alice", "1");
-    fake.setCollaboratorPermission("alice", "admin");
     const res = await handlePreviewEnable(
       req("http://x/api/cimisy/preview/enable?collection=posts&slug=hello", { headers: { cookie } }),
       configWithRestrictedRoles,
@@ -101,8 +120,8 @@ describe("handlePreviewEnable", () => {
   });
 
   it("enables draft mode and sets the preview-ref cookie to the default branch for a direct-publish role", async () => {
+    seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "admin" }]); // admin (directPublish: true)
     const cookie = await sessionCookieFor("alice", "1");
-    fake.setCollaboratorPermission("alice", "admin"); // maps to "admin" (directPublish: true) via default role mapping
     const res = await handlePreviewEnable(
       req("http://x/api/cimisy/preview/enable?collection=posts&slug=hello&redirectTo=/blog/hello", { headers: { cookie } }),
       cimisyConfig,
@@ -115,8 +134,8 @@ describe("handlePreviewEnable", () => {
   });
 
   it("enables draft mode and sets the preview-ref cookie to the draft branch for a non-direct-publish role", async () => {
+    seedRoster(fake, [{ githubId: "2", githubLogin: "bob", role: "editor" }]); // editor (directPublish: false)
     const cookie = await sessionCookieFor("bob", "2");
-    fake.setCollaboratorPermission("bob", "write"); // maps to "editor" (directPublish: false)
     const res = await handlePreviewEnable(
       req("http://x/api/cimisy/preview/enable?collection=posts&slug=hello", { headers: { cookie } }),
       cimisyConfig,
@@ -126,8 +145,8 @@ describe("handlePreviewEnable", () => {
   });
 
   it("rejects an absolute/protocol-relative redirectTo (open-redirect prevention)", async () => {
+    seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "admin" }]);
     const cookie = await sessionCookieFor("alice", "1");
-    fake.setCollaboratorPermission("alice", "admin");
 
     const evilTargets = ["https://evil.com/phish", "//evil.com/phish", "http://evil.com"];
     for (const evil of evilTargets) {
