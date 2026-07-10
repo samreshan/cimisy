@@ -55,7 +55,7 @@ export function blocksField(options: BlocksFieldOptions): BlocksFieldDefinition 
   const nodeSchema = z.object({
     type: z.string(),
     id: z.string(),
-    props: z.record(z.unknown()),
+    props: z.record(z.string(), z.unknown()),
   });
   return {
     kind: "blocks",
