@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentType, JSX, ReactNode } from "react";
 
 export interface BlockNodeLike {
   type: string;
