@@ -4,7 +4,8 @@ A git-based, security-first CMS that installs directly into an existing Next.js 
 
 - **No lock-in.** Delete the two route files and the config, and you're left with plain MDX/YAML content and a normal Next.js app — nothing to migrate.
 - **Security-first.** Every write is authorized server-side against a centralized RBAC check (never a hidden UI button), all MDX is parsed through a strict AST allowlist (no `import`/`export`, no raw `{expression}` escape hatches, no unregistered JSX), and CSRF/rate-limiting/path-traversal protections are on by default. See [Security](#security) below.
-- **Real multi-user roles.** GitHub's own collaborator permissions map to cimisy roles out of the box — admins/maintainers publish directly, other contributors get a branch + pull request per draft, reviewed and merged through GitHub itself.
+- **Real multi-user roles.** The repo owner bootstraps as admin on first sign-in and grants roles to everyone else from a Team screen — admins/publishers publish directly, editors get a branch + pull request per draft, reviewed and merged right from the admin UI (or GitHub itself).
+- **A real editor.** Rich text (bold/italic/links/inline code) via a Tiptap-based block editor with slash-menu insertion, image upload, an in-CMS drafts/review screen, and a live preview pane.
 
 ## Table of contents
 
@@ -13,6 +14,8 @@ A git-based, security-first CMS that installs directly into an existing Next.js 
 - [Setting up a GitHub App](#setting-up-a-github-app)
 - [Config reference](#config-reference)
 - [RBAC guide](#rbac-guide)
+- [Rich text & media](#rich-text--media)
+- [Drafts & review](#drafts--review)
 - [Reading content on your site](#reading-content-on-your-site)
 - [Draft Mode / preview](#draft-mode--preview)
 - [Security](#security)
@@ -150,8 +153,8 @@ The top-level config object, from `cimisy/config`.
 | `source` | `StorageAdapter` | yes | `localSource(...)` or `githubSource(...)` |
 | `collections` | `Record<string, CollectionDefinition>` | yes | see below |
 | `singletons` | `Record<string, SingletonDefinition>` | no | single fixed-path documents (e.g. site settings) |
-| `roles` | `Record<string, RoleDefinition>` | no | defaults to a built-in admin/editor/viewer set — see [RBAC guide](#rbac-guide) |
-| `roleMapping` | `Record<string, string>` | no | GitHub permission level → role name; has a sane default |
+| `roles` | `Record<string, RoleDefinition>` | no | defaults to a built-in admin/publisher/editor/viewer set — see [RBAC guide](#rbac-guide) |
+| `roleMapping` | `Record<string, string>` | no | GitHub permission level → role name, used only for first-admin bootstrap — see [RBAC guide](#rbac-guide) |
 | `rateLimiter` | `RateLimiter` | no | defaults to an in-memory limiter — see [Security](#security) |
 
 ### `collection(options)`
@@ -175,7 +178,7 @@ Same shape as `collection`, minus `path` (a singleton is one fixed file, e.g. `"
 | `fields.text({ label, validation? })` | `string` | `validation.isRequired`, `validation.maxLength` |
 | `fields.slug({ source })` | `string` | `source`: sibling field to auto-derive from; validated against the same safe-path rules used everywhere a slug becomes a file path |
 | `fields.date({ label })` | `Date` | — |
-| `fields.image({ label, directory })` | `string \| null` | `directory`: repo-relative path new uploads are written under |
+| `fields.image({ label, directory })` | `string \| null` | `directory`: repo-relative path new uploads are written under; the admin UI renders an upload + browse-existing picker for this field — see [Rich text & media](#rich-text--media) |
 | `fields.array(itemField)` | `T[]` | wraps any other field |
 | `fields.blocks({ label?, blocks })` | `BlockNode[]` | `blocks`: a map of block name → `blocks.*` definition (below) — this is the rich-content/MDX body field |
 
@@ -189,44 +192,73 @@ Built-in block kinds, each returning a `BlockDefinition` that declares its own z
 - `blocks.image()`
 - `blocks.callout({ tones })` — e.g. `tones: ["info", "warning", "danger"]`
 
-`paragraph`/`heading`/`code` serialize as native Markdown (no JSX needed — inert by construction). `image`/`callout` serialize as real JSX elements that map to actual React components you provide when rendering (see [Reading content on your site](#reading-content-on-your-site)). You are not limited to the built-ins — any object implementing the `BlockDefinition` interface (`propsSchema`, `toMdxNode`, `matches`, `extractProps`) can be registered the same way; this is what keeps the MDX write path free of string concatenation regardless of which blocks a project defines.
+`paragraph`/`heading`/`code` serialize as native Markdown (no JSX needed — inert by construction). `image`/`callout` serialize as real JSX elements that map to actual React components you provide when rendering (see [Reading content on your site](#reading-content-on-your-site)). You are not limited to the built-ins — any object implementing the `BlockDefinition` interface (`propsSchema`, `toMdxNode`, `matches`, `extractProps`) can be registered the same way; this is what keeps the MDX write path free of string concatenation regardless of which blocks a project defines. A custom block type is still fully editable in the admin UI — the rich editor falls back to a generic props form for any block kind it doesn't have a dedicated node for.
+
+`paragraph`/`callout` props carry rich inline text: `content: InlineNode[]` (a small recursive union — `text` / `strong` / `emphasis` / `inlineCode` / `link`), not a plain string. `heading`/`code` stay plain text/code strings — no bold/italic inside a heading or a fenced code block.
 
 ## RBAC guide
 
-Authorization is two layers, both enforced server-side on every request — never inferred from what the UI happens to show:
+Authorization is admin-managed, not inferred from GitHub permissions on every request. A person's cimisy role lives in a roster committed to the repo (`.cimisy/users.yaml`), and every request checks it server-side — never inferred from what the UI happens to show.
 
-**Layer 1 — GitHub's own collaborator permission** (only relevant with the GitHub adapter) seeds a cimisy role via `roleMapping`. Default:
+**Bootstrap, then fully explicit.** The very first person to ever sign in becomes admin automatically if their live GitHub collaborator permission is admin-level (the practical stand-in for "the repo owner is the admin"). Every sign-in after that — by anyone — lands **pending** (no role) until an existing admin grants one from the **Team** screen (`/admin/team`). GitHub's collaborator permission is never consulted again once the roster is non-empty; `roleMapping` below only controls that one-time bootstrap check.
 
 ```ts
-{ admin: "admin", maintain: "admin", write: "editor", triage: "viewer", read: "viewer" }
+// Only relevant for the bootstrap check above:
+roleMapping: { admin: "admin", maintain: "admin", write: "editor", triage: "viewer", read: "viewer" }
 ```
 
-**Layer 2 — cimisy roles**, each a `directPublish` flag plus a list of path-glob + action rules. Default:
+**Roles**, each a `directPublish` flag plus a list of path-glob + action rules. Default:
 
 ```ts
 {
-  admin:  { directPublish: true,  rules: [{ path: "**", actions: ["read", "write", "publish", "manageSchema"] }] },
-  editor: { directPublish: false, rules: [{ path: "**", actions: ["read", "write"] }] },
-  viewer: { directPublish: false, rules: [{ path: "**", actions: ["read"] }] },
+  admin:     { directPublish: true,  rules: [{ path: "**", actions: ["read", "write", "publish", "manageSchema", "manageUsers"] }] },
+  publisher: { directPublish: true,  rules: [{ path: "**", actions: ["read", "write", "publish"] }] },
+  editor:    { directPublish: false, rules: [{ path: "**", actions: ["read", "write"] }] },
+  viewer:    { directPublish: false, rules: [{ path: "**", actions: ["read"] }] },
 }
 ```
 
-Override either or both in `config({ roles, roleMapping })` — for example, to restrict an `editor` role to one subdirectory:
+`publisher` and `editor` differ only in `directPublish` — an editor's saves always land on a draft branch + PR; a publisher's (like an admin's) commit straight to the default branch. `publish` gates merging someone else's draft from the [Drafts screen](#drafts--review); `manageUsers` gates the Team screen itself, with a built-in guard against leaving the roster with zero admins.
+
+Override in `config({ roles, roleMapping })` — for example, to restrict `editor` to one subdirectory:
 
 ```ts
 roles: {
-  admin:  { directPublish: true,  rules: [{ path: "**", actions: ["read", "write", "publish", "manageSchema"] }] },
-  editor: { directPublish: false, rules: [{ path: "content/posts/**", actions: ["read", "write"] }] },
-  viewer: { directPublish: false, rules: [{ path: "**", actions: ["read"] }] },
+  admin:     { directPublish: true,  rules: [{ path: "**", actions: ["read", "write", "publish", "manageSchema", "manageUsers"] }] },
+  publisher: { directPublish: true,  rules: [{ path: "**", actions: ["read", "write", "publish"] }] },
+  editor:    { directPublish: false, rules: [{ path: "content/posts/**", actions: ["read", "write"] }] },
+  viewer:    { directPublish: false, rules: [{ path: "**", actions: ["read"] }] },
 },
-roleMapping: { admin: "admin", maintain: "admin", write: "editor", triage: "viewer", read: "viewer" },
 ```
 
 Every rule check is deny-by-default — no matching rule means no access, full stop. This is enforced by one centralized function on the server (never duplicated per-route, and never satisfied by anything the client sends), so there's no per-endpoint place for an authorization check to be forgotten.
 
-**Publishing:** `directPublish: true` roles commit straight to the default branch. Everyone else's saves land on a deterministic branch (`cimisy/<username>/<collection>/<slug>`) with an auto-opened pull request; repeated saves push more commits to the same branch/PR instead of duplicating it. Merging is intentionally *not* reimplemented by cimisy — that's GitHub's own PR review and branch protection; cimisy only opens the PR and links to it from the admin UI.
+**Publishing:** `directPublish: true` roles commit straight to the default branch. Everyone else's saves (and media uploads, and slash-menu edits — the same draft ref applies uniformly) land on a deterministic branch (`cimisy/<username>/<collection>/<slug>`) with an auto-opened pull request; repeated saves push more commits to the same branch/PR instead of duplicating it. Reviewing and merging can happen from the [Drafts screen](#drafts--review) inside cimisy, or on GitHub itself — cimisy never requires you to use one over the other.
 
-The local adapter has no concept of collaborator permissions (there's no GitHub to ask), so it always resolves to whatever role your `roleMapping` maps unauthenticated/local requests to — appropriate for its dev-only scope.
+The local adapter has no auth (there's no GitHub to sign in with), so every request acts as a fixed, full-access `local-admin` identity — appropriate for its dev-only scope; the roster/Team screen only apply to the GitHub adapter.
+
+## Rich text & media
+
+The block editor (a Tiptap/ProseMirror instance under the hood, admin-UI-only — nothing in `cimisy/render` or the server exports depends on it) supports:
+
+- **Bold, italic, inline code, and links** — select text to get a formatting toolbar. A link's URL is validated (safe schemes only: `http:`, `https:`, `mailto:`, or relative) at the editor, on save, on read, and again at render time — four independent layers, since a `.mdx` file can always be hand-edited outside the UI.
+- **Slash-menu block insertion** — type `/` to insert any block your `fields.blocks({ blocks })` registry declares, built-in or custom.
+- **Block reordering** — a list beneath the editor with move-up/move-down/remove controls (deliberately not drag-and-drop; a wrong implementation there risks corrupting the document, and index-based reordering is exactly as capable).
+
+For `fields.image()`, the admin UI renders a thumbnail, an "Upload…" button, and a "Browse existing…" picker over everything already uploaded to that field's `directory`. Uploads:
+
+- are validated by their actual bytes (a PNG/JPEG/GIF/WEBP signature check), not by filename or client-claimed content type — this is an allowlist by construction, which is also why **SVG is not supported** (it can carry `<script>`);
+- are capped at 5MB, checked before the payload is even base64-decoded;
+- get a randomized filename (never the client-supplied one) to avoid both collisions and directory enumeration;
+- land through the same draft-vs-direct-publish path as any other save — an editor's upload commits to their draft branch, not straight to the default branch.
+
+A custom `StorageAdapter` needs to implement `readRaw` (serving an uploaded file's bytes back) and honor `encoding: "base64"` in `commitChange`'s `writes` to support uploads; both are optional, so an adapter without them just means uploads are unavailable, not a broken build.
+
+## Drafts & review
+
+For any adapter reporting pull-request support (the GitHub adapter; the local adapter has no PR concept), a **Drafts** nav item lists open drafts: your own, plus anyone's you have `publish` permission to review. Each draft shows its entry, its author, a **Preview** link (rendering that exact draft branch on your real site via Draft Mode — not just your own drafts, unlike the per-entry Preview link), a link to the underlying pull request, and — for reviewers — an **Approve & merge** button that merges it without leaving cimisy.
+
+Nothing about drafts changes if you'd rather review on GitHub directly: the PR is real, cimisy's screen is just a second way to see and act on the same thing.
 
 ## Reading content on your site
 
@@ -260,7 +292,9 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
 
 ## Draft Mode / preview
 
-If a collection sets `previewPath`, saved entries get a "Preview" link in the admin UI. For a `directPublish` role this just opens the live page; for a draft/PR role it enables Next.js Draft Mode against that specific draft branch, so the exact unmerged content renders on your real site route with no rebuild. Exit it via `/api/cimisy/preview/disable?redirectTo=<path>` (an open-redirect guard rejects any `redirectTo` that isn't a same-origin relative path).
+If a collection sets `previewPath`, the entry editor gets a "Show preview" toggle rendering that page in a side-by-side iframe. For a `directPublish` role this just shows the live page; for a draft/PR role it enables Next.js Draft Mode against that specific draft branch, so the exact unmerged content renders on your real site route with no rebuild. The pane shows the last *saved* state (reloading on every keystroke isn't practical) — a banner says so whenever there are unsaved changes.
+
+The same mechanism, with an explicit `?ref=`, is what lets a reviewer preview *someone else's* draft from the [Drafts screen](#drafts--review) — the ref is validated as a well-formed draft branch for the exact entry being requested, and the reviewer still needs `read` permission on it, same as any other preview. Exit preview via `/api/cimisy/preview/disable?redirectTo=<path>` (an open-redirect guard rejects any `redirectTo` that isn't a same-origin relative path).
 
 ## Security
 
@@ -270,6 +304,8 @@ cimisy holds write credentials to your repository, so security is treated as a f
 - **Authorization is centralized and server-side.** One function gates every read/write/delete/history request; client-side UI state is never the boundary (a request forging `role`/`isAdmin` fields has zero effect).
 - **CSRF protection**: `sameSite: "lax"` session cookies plus explicit `Origin`/`Referer` verification on every state-changing route.
 - **Path-traversal defense-in-depth** at every layer that turns user input into a file path or git ref.
+- **Media uploads are format-sniffed, not trusted by extension** — only PNG/JPEG/GIF/WEBP signatures are accepted (SVG excluded outright, since it can carry `<script>`), capped at 5MB before decoding, written to a randomized filename under an allowlisted directory, and served back with `X-Content-Type-Options: nosniff`.
+- **Link URLs are scheme-validated** (`http:`/`https:`/`mailto:`/relative only) at four independent layers — the editor, on save, on read, and at render — since a `.mdx` file can always be hand-edited outside cimisy entirely.
 - **Rate limiting** on writes and the OAuth callback, with a pluggable interface — the shipped in-memory default is explicitly not safe across multiple serverless instances; supply your own `RateLimiter` backed by shared storage in that kind of deployment.
 - Secrets (App private key, client secret, session secret) are imported only in modules marked `server-only`, so a client-bundle leak is a build error, not a runtime surprise.
 

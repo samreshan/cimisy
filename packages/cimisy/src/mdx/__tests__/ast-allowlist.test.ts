@@ -33,11 +33,25 @@ const maliciousFixtures: Record<string, string> = {
   "fragment with expression child": "<>{globalThis}</>",
   "expression disguised as attribute value with extra braces": '<Image src={"safe" + fetch("evil.com")} alt="x" />',
   "esm smuggled after valid content": 'Some safe text.\n\nimport Evil from "evil-package"',
+  "javascript: URL in a hand-edited markdown link": "Click [here](javascript:alert(document.cookie)) now.",
+  "data: URL in a hand-edited markdown link": "Click [here](data:text/html,<script>alert(1)</script>) now.",
+  "vbscript: URL in a hand-edited markdown link": "Click [here](vbscript:msgbox(1)) now.",
 };
 
 describe("assertSafeMdxTree / parseMdxToBlocks — malicious MDX fixture corpus", () => {
   it.each(Object.entries(maliciousFixtures))("rejects: %s", (_name, source) => {
     expect(() => parseMdxToBlocks(source, registry)).toThrow(ValidationError);
+  });
+
+  it("sanity control: a normal https: markdown link is inert and must NOT be rejected", () => {
+    const result = parseMdxToBlocks("Check [this out](https://example.com/page).", registry);
+    expect(result[0]?.props).toEqual({
+      content: [
+        { type: "text", text: "Check " },
+        { type: "link", href: "https://example.com/page", children: [{ type: "text", text: "this out" }] },
+        { type: "text", text: "." },
+      ],
+    });
   });
 
   it("sanity control: fenced code content is inert text, never parsed as MDX/JS (must NOT be rejected)", () => {

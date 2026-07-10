@@ -7,6 +7,7 @@ import type {
   ChangeResult,
   FileMeta,
   FileRecord,
+  RawFileRecord,
   StorageAdapter,
 } from "./types.js";
 
@@ -21,8 +22,14 @@ export interface LocalSourceOptions {
   allowInProduction?: boolean;
 }
 
-function hashContent(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
+/**
+ * Hashes raw bytes rather than a decoded-as-utf8 string: a media file's
+ * on-disk bytes aren't valid utf-8, so hashing must happen before (read) or
+ * independent of (write) any text decoding, or a binary file's version
+ * would be computed over mojibake instead of its actual content.
+ */
+function hashBuffer(buffer: Buffer | Uint8Array): string {
+  return createHash("sha256").update(buffer).digest("hex");
 }
 
 /**
@@ -60,8 +67,20 @@ export class LocalStorageAdapter implements StorageAdapter {
   async read(path: string): Promise<FileRecord | null> {
     const absPath = resolveSafe(this.rootDir, path);
     try {
-      const content = await readFile(absPath, "utf8");
-      return { path, content, version: hashContent(content) };
+      const buffer = await readFile(absPath);
+      return { path, content: buffer.toString("utf8"), version: hashBuffer(buffer) };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+  }
+
+  /** Raw-bytes read path for binary content (media, M4) — never utf-8-decodes, unlike read() above. */
+  async readRaw(path: string): Promise<RawFileRecord | null> {
+    const absPath = resolveSafe(this.rootDir, path);
+    try {
+      const buffer = await readFile(absPath);
+      return { content: new Uint8Array(buffer) };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw err;
@@ -82,8 +101,8 @@ export class LocalStorageAdapter implements StorageAdapter {
       const entryAbsPath = join(absDir, entry);
       const entryStat = await stat(entryAbsPath);
       if (!entryStat.isFile()) continue;
-      const content = await readFile(entryAbsPath, "utf8");
-      results.push({ path: `${dirPrefix}/${entry}`, version: hashContent(content) });
+      const buffer = await readFile(entryAbsPath);
+      results.push({ path: `${dirPrefix}/${entry}`, version: hashBuffer(buffer) });
     }
     return results;
   }
@@ -105,18 +124,20 @@ export class LocalStorageAdapter implements StorageAdapter {
       }
     }
 
+    let lastBuffer: Buffer | undefined;
     for (const write of change.writes) {
       const absPath = resolveSafe(this.rootDir, write.path);
       await mkdir(dirname(absPath), { recursive: true });
-      await writeFile(absPath, write.content, "utf8");
+      const buffer = write.encoding === "base64" ? Buffer.from(write.content, "base64") : Buffer.from(write.content, "utf8");
+      await writeFile(absPath, buffer);
+      lastBuffer = buffer;
     }
     for (const path of change.deletes ?? []) {
       const absPath = resolveSafe(this.rootDir, path);
       await rm(absPath, { force: true });
     }
 
-    const lastWrite = change.writes.at(-1);
-    return { version: lastWrite ? hashContent(lastWrite.content) : hashContent("") };
+    return { version: lastBuffer ? hashBuffer(lastBuffer) : hashBuffer(Buffer.alloc(0)) };
   }
 }
 

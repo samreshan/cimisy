@@ -8,27 +8,53 @@ import "mdast-util-mdx";
 import { toString as mdastToString } from "mdast-util-to-string";
 import { z } from "zod";
 import type { BlockDefinition } from "../config/fields/blocks.js";
+import { type InlineNode, inlineContentSchema, inlineFromMdast, inlineToMdast } from "./inline.js";
 
 function textNode(value: string): Content {
   return { type: "text", value } as Content;
 }
 
 /**
- * Plain-text paragraph — standard markdown, no JSX. Any inline formatting
- * a hand-editor adds (bold, links, etc.) is flattened to plain text on
- * read rather than rejected: it's 100% inert markdown with zero
- * code-execution surface, so the security fail-closed posture that
- * applies to JSX/expressions doesn't apply here — this is a data-fidelity
- * simplification, not a safety compromise, and is called out in the docs
- * as a known v1 limitation.
+ * Accepts the v1 `{ text: string }` shape and upgrades it to the v2
+ * `{ content: InlineNode[] }` shape before the real schema runs. On-disk
+ * v1 files need no migration at all — parse.ts always rebuilds `content`
+ * fresh from mdast, so this shim exists purely for in-flight v1 clients
+ * (e.g. a browser tab open across a deploy) whose last unsaved edit is
+ * still in the old shape.
  */
-export function paragraph(): BlockDefinition<{ text: string }> {
+function upgradeLegacyText(value: unknown): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.text === "string" && !("content" in obj)) {
+      const { text, ...rest } = obj;
+      return { ...rest, content: [{ type: "text", text } satisfies InlineNode] };
+    }
+  }
+  return value;
+}
+
+/**
+ * Standard markdown paragraph, no JSX. Inline formatting (bold/italic/
+ * inline-code/links) is a first-class `content: InlineNode[]` prop as of
+ * v2 — see mdx/inline.ts. Any *other* inline markdown a hand-editor might
+ * add (strikethrough, footnotes, hard breaks, ...) still flattens to
+ * plain text rather than being rejected: it's 100% inert markdown with
+ * zero code-execution surface, so the fail-closed posture that applies to
+ * JSX/expressions doesn't apply here — a data-fidelity choice, not a
+ * safety one.
+ */
+export function paragraph(): BlockDefinition<{ content: InlineNode[] }> {
   return {
     kind: "paragraph",
-    propsSchema: z.object({ text: z.string() }).strict(),
-    toMdxNode: ({ text }) => ({ type: "paragraph", children: [textNode(text)] }) as Content,
+    propsSchema: z.preprocess(upgradeLegacyText, z.object({ content: inlineContentSchema }).strict()) as unknown as z.ZodType<{
+      content: InlineNode[];
+    }>,
+    richTextProp: "content",
+    toMdxNode: ({ content }) => ({ type: "paragraph", children: inlineToMdast(content) }) as Content,
     matches: (node) => node.type === "paragraph",
-    extractProps: (node) => ({ text: mdastToString(node) }),
+    extractProps: (node) => ({
+      content: inlineFromMdast(("children" in node ? (node as unknown as { children: unknown[] }).children : []) as never),
+    }),
   };
 }
 
@@ -130,30 +156,38 @@ export interface CalloutOptions {
   tones: string[];
 }
 
-export function callout(options: CalloutOptions): BlockDefinition<{ tone: string; text: string }> {
+export function callout(options: CalloutOptions): BlockDefinition<{ tone: string; content: InlineNode[] }> {
   const allowedTones = options.tones;
   return {
     kind: "callout",
-    propsSchema: z
-      .object({
-        tone: z.string().refine((t) => allowedTones.includes(t), { message: `Tone must be one of: ${allowedTones.join(", ")}` }),
-        text: z.string(),
-      })
-      .strict(),
+    propsSchema: z.preprocess(
+      upgradeLegacyText,
+      z
+        .object({
+          tone: z.string().refine((t) => allowedTones.includes(t), { message: `Tone must be one of: ${allowedTones.join(", ")}` }),
+          content: inlineContentSchema,
+        })
+        .strict(),
+    ) as unknown as z.ZodType<{ tone: string; content: InlineNode[] }>,
     jsxName: "Callout",
     uiOptions: { tones: allowedTones },
-    toMdxNode: ({ tone, text }) =>
+    richTextProp: "content",
+    toMdxNode: ({ tone, content }) =>
       ({
         type: "mdxJsxFlowElement",
         name: "Callout",
         attributes: [{ type: "mdxJsxAttribute", name: "tone", value: tone }],
-        children: [{ type: "paragraph", children: [textNode(text)] }],
+        children: [{ type: "paragraph", children: inlineToMdast(content) }],
       }) as Content,
     matches: (node) => node.type === "mdxJsxFlowElement" && (node as unknown as { name: string | null }).name === "Callout",
-    extractProps: (node) => ({
-      ...extractJsxAttributes(node),
-      text: "children" in node ? mdastToString(node as Content) : "",
-    }),
+    extractProps: (node) => {
+      const children = "children" in node ? (node as unknown as { children: Content[] }).children : [];
+      const firstParagraph = children.find((c) => c.type === "paragraph") as unknown as { children?: unknown[] } | undefined;
+      return {
+        ...extractJsxAttributes(node),
+        content: inlineFromMdast((firstParagraph?.children ?? []) as never),
+      };
+    },
   };
 }
 

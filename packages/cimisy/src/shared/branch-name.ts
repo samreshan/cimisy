@@ -32,3 +32,27 @@ export function draftBranchName(username: string, collectionName: string, slug: 
   assertSafeSlug(slug);
   return `cimisy/${username}/${collectionName}/${slug}`;
 }
+
+/**
+ * The inverse of draftBranchName — parses (and re-validates) a branch name
+ * of unknown origin back into its parts, returning null rather than
+ * throwing on anything that isn't a well-formed draft branch. Used
+ * wherever a ref comes from the client or from listing PRs on the repo
+ * (drafts discovery, media reads on a draft branch, previewing someone
+ * else's draft) — a plain split("/") is lossless here because
+ * SAFE_REF_COMPONENT forbids "/" in username/collectionName, so the
+ * branch always has exactly 4 segments.
+ */
+export function parseDraftBranchName(branch: string): { username: string; collectionName: string; slug: string } | null {
+  const parts = branch.split("/");
+  if (parts.length !== 4 || parts[0] !== "cimisy") return null;
+  const [, username, collectionName, slug] = parts as [string, string, string, string];
+  try {
+    assertSafeRefComponent(username, "Username");
+    assertSafeRefComponent(collectionName, "Collection name");
+    assertSafeSlug(slug);
+  } catch {
+    return null;
+  }
+  return { username, collectionName, slug };
+}

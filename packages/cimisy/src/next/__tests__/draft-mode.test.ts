@@ -144,6 +144,65 @@ describe("handlePreviewEnable", () => {
     expect(setCookieHeader).toContain(`${PREVIEW_REF_COOKIE_NAME}=cimisy%2Fbob%2Fposts%2Fhello`);
   });
 
+  it("accepts a valid ?ref= for a draft branch belonging to someone else (reviewing their draft)", async () => {
+    seedRoster(fake, [
+      { githubId: "1", githubLogin: "alice", role: "publisher" }, // publish permission, reviewing bob's draft
+      { githubId: "2", githubLogin: "bob", role: "editor" },
+    ]);
+    const cookie = await sessionCookieFor("alice", "1");
+    const res = await handlePreviewEnable(
+      req(
+        "http://x/api/cimisy/preview/enable?collection=posts&slug=hello&ref=" + encodeURIComponent("cimisy/bob/posts/hello"),
+        { headers: { cookie } },
+      ),
+      cimisyConfig,
+    );
+    expect(res.status).toBe(307);
+    const setCookieHeader = res.headers.get("set-cookie") ?? "";
+    expect(setCookieHeader).toContain(`${PREVIEW_REF_COOKIE_NAME}=cimisy%2Fbob%2Fposts%2Fhello`);
+  });
+
+  it("rejects a ?ref= that isn't a well-formed draft branch", async () => {
+    seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "admin" }]);
+    const cookie = await sessionCookieFor("alice", "1");
+    const res = await handlePreviewEnable(
+      req("http://x/api/cimisy/preview/enable?collection=posts&slug=hello&ref=some-random-branch", { headers: { cookie } }),
+      cimisyConfig,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a ?ref= whose parsed collection/slug doesn't match the requested collection/slug (can't preview an unrelated entry under someone else's draft ref)", async () => {
+    seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "admin" }]);
+    const cookie = await sessionCookieFor("alice", "1");
+    const res = await handlePreviewEnable(
+      req(
+        "http://x/api/cimisy/preview/enable?collection=posts&slug=hello&ref=" +
+          encodeURIComponent("cimisy/bob/posts/different-slug"),
+        { headers: { cookie } },
+      ),
+      cimisyConfig,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("still enforces read permission even with a valid ?ref=", async () => {
+    const configWithRestrictedRoles = config({
+      ...cimisyConfig,
+      roles: { blocked: { directPublish: false, rules: [] } },
+    });
+    seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "blocked" }]);
+    const cookie = await sessionCookieFor("alice", "1");
+    const res = await handlePreviewEnable(
+      req(
+        "http://x/api/cimisy/preview/enable?collection=posts&slug=hello&ref=" + encodeURIComponent("cimisy/bob/posts/hello"),
+        { headers: { cookie } },
+      ),
+      configWithRestrictedRoles,
+    );
+    expect(res.status).toBe(403);
+  });
+
   it("rejects an absolute/protocol-relative redirectTo (open-redirect prevention)", async () => {
     seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "admin" }]);
     const cookie = await sessionCookieFor("alice", "1");

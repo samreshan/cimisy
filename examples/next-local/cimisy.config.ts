@@ -14,6 +14,7 @@ export default config({
         title: fields.text({ label: "Title", validation: { isRequired: true } }),
         slug: fields.slug({ source: "title" }),
         publishedAt: fields.date({ label: "Published at" }),
+        coverImage: fields.image({ label: "Cover image", directory: "posts/uploads" }),
         body: fields.blocks({
           label: "Body",
           blocks: {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { draftBranchName } from "../branch-name.js";
+import { draftBranchName, parseDraftBranchName } from "../branch-name.js";
 import { UnsafePathError } from "../errors.js";
 
 describe("draftBranchName", () => {
@@ -52,5 +52,35 @@ describe("draftBranchName", () => {
 
   it("rejects a username over the ref-component length cap (63 chars)", () => {
     expect(() => draftBranchName("a".repeat(64), "posts", "slug")).toThrow(UnsafePathError);
+  });
+});
+
+describe("parseDraftBranchName", () => {
+  it("is the exact inverse of draftBranchName for well-formed branches", () => {
+    const branch = draftBranchName("alice", "posts", "hello-world");
+    expect(parseDraftBranchName(branch)).toEqual({ username: "alice", collectionName: "posts", slug: "hello-world" });
+  });
+
+  it("preserves a mixed-case username", () => {
+    const branch = draftBranchName("JohnDoe", "posts", "hello-world");
+    expect(parseDraftBranchName(branch)).toEqual({ username: "JohnDoe", collectionName: "posts", slug: "hello-world" });
+  });
+
+  it.each([
+    "not-a-cimisy-branch",
+    "cimisy/only-two-parts",
+    "cimisy/a/b/c/d",
+    "other-prefix/alice/posts/hello",
+    "cimisy//posts/hello", // empty username segment
+    "cimisy/alice/posts/UPPERCASE", // invalid slug shape
+    "cimisy/alice/posts/", // empty slug
+    "",
+    "cimisy/../../../etc/passwd/x",
+  ])("returns null (not a throw) for a malformed or non-draft branch: %j", (bad) => {
+    expect(parseDraftBranchName(bad)).toBeNull();
+  });
+
+  it("returns null rather than throwing, so callers can safely probe arbitrary client-supplied refs", () => {
+    expect(() => parseDraftBranchName("../../etc/passwd")).not.toThrow();
   });
 });

@@ -19,5 +19,13 @@ export function serializeBlocksToMdx(blocks: BlockNode[], registry: Record<strin
     return def.toMdxNode(validatedProps);
   });
   const tree: Root = { type: "root", children };
-  return toMarkdown(tree, { extensions: [mdxToMarkdown()] });
+  // emphasis: "_" (strong stays the "**" default): without this, both
+  // marks serialize with the same "*" character, so a strong span
+  // wrapping (or wrapped by) an emphasis span collapses into the
+  // ambiguous "***text***" form — CommonMark always re-parses that as
+  // emphasis(strong(text)), silently flipping the nesting order on
+  // round-trip regardless of which was originally outermost. Using a
+  // different marker per mark keeps every combination (`**_x_**`,
+  // `_**x**_`) unambiguous to reparse.
+  return toMarkdown(tree, { extensions: [mdxToMarkdown()], emphasis: "_" });
 }

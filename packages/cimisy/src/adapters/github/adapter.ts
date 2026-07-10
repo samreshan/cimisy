@@ -5,11 +5,13 @@ import { CimisyError } from "../../shared/errors.js";
 import { assertSafeRepoPath } from "../../shared/slug.js";
 import type {
   ChangeRequest,
+  ChangeRequestSummary,
   ChangeResult,
   FileMeta,
   FileRecord,
   HistoryEntry,
   OpenChangeRequestInput,
+  RawFileRecord,
   StorageAdapter,
 } from "../../storage/types.js";
 
@@ -94,6 +96,25 @@ export class GithubStorageAdapter implements StorageAdapter {
     }
   }
 
+  /** Raw-bytes read path for binary content (media, M4) — never utf-8-decodes, unlike read() above. */
+  async readRaw(path: string, ref?: string): Promise<RawFileRecord | null> {
+    assertSafeRepoPath(path);
+    const octokit = await this.getClient();
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner: this.owner,
+        repo: this.repoName,
+        path,
+        ref: ref ?? this.defaultBranch,
+      });
+      if (Array.isArray(data) || data.type !== "file" || data.content === undefined) return null;
+      return { content: Buffer.from(data.content.replace(/\n/g, ""), "base64") };
+    } catch (err) {
+      if (isNotFound(err)) return null;
+      throw err;
+    }
+  }
+
   async list(dirPrefix: string, ref?: string): Promise<FileMeta[]> {
     assertSafeRepoPath(dirPrefix);
     const octokit = await this.getClient();
@@ -143,7 +164,7 @@ export class GithubStorageAdapter implements StorageAdapter {
         owner: this.owner,
         repo: this.repoName,
         content: write.content,
-        encoding: "utf-8",
+        encoding: write.encoding ?? "utf-8",
       });
       lastBlobSha = blob.sha;
       treeEntries.push({ path: write.path, mode: "100644", type: "blob", sha: blob.sha });
@@ -242,6 +263,29 @@ export class GithubStorageAdapter implements StorageAdapter {
   async mergeChangeRequest(id: string): Promise<void> {
     const octokit = await this.getClient();
     await octokit.rest.pulls.merge({ owner: this.owner, repo: this.repoName, pull_number: Number(id) });
+  }
+
+  /**
+   * Lists open PRs whose head branch starts with `headPrefix` (the drafts,
+   * M5, discovery path). GitHub's `head` list filter only supports an
+   * exact "owner:branch" match, not a prefix, so this fetches all open PRs
+   * and filters client-side — acceptable for the "open PRs on a single
+   * cimisy-managed repo" scale this is built for.
+   */
+  async listChangeRequests(filter: { headPrefix: string }): Promise<ChangeRequestSummary[]> {
+    const octokit = await this.getClient();
+    const { data } = await octokit.rest.pulls.list({ owner: this.owner, repo: this.repoName, state: "open" });
+    return data
+      .filter((pr) => pr.head.ref.startsWith(filter.headPrefix))
+      .map((pr) => ({
+        id: String(pr.number),
+        title: pr.title,
+        sourceRef: pr.head.ref,
+        url: pr.html_url,
+        state: pr.state as "open" | "closed",
+        updatedAt: pr.updated_at,
+        author: pr.user?.login,
+      }));
   }
 
   async getHistory(path: string): Promise<HistoryEntry[]> {

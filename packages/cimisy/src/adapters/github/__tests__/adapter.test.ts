@@ -196,6 +196,63 @@ describe("GithubStorageAdapter", () => {
     expect(second.url).toBe(first.url);
   });
 
+  it("commits a base64-encoded binary file and reads its raw bytes back unchanged", async () => {
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03]);
+    const base64 = pngBytes.toString("base64");
+    const result = await adapter.commitChange({
+      ref: "main",
+      baseVersion: null,
+      message: "upload image",
+      author: AUTHOR,
+      writes: [{ path: "images/a.png", content: base64, encoding: "base64" }],
+    });
+    expect(result.conflict).toBeUndefined();
+
+    const raw = await adapter.readRaw("images/a.png");
+    expect(raw).not.toBeNull();
+    expect(Buffer.from(raw!.content).equals(pngBytes)).toBe(true);
+  });
+
+  it("readRaw returns null for a file that doesn't exist", async () => {
+    expect(await adapter.readRaw("images/missing.png")).toBeNull();
+  });
+
+  it("a utf-8 text file committed without an explicit encoding still round-trips through read() as before (default stays utf-8)", async () => {
+    await adapter.commitChange({
+      ref: "main",
+      baseVersion: (await adapter.read("posts/existing.mdx"))!.version,
+      message: "update",
+      author: AUTHOR,
+      writes: [{ path: "posts/existing.mdx", content: "plain text, no encoding specified" }],
+    });
+    const record = await adapter.read("posts/existing.mdx");
+    expect(record?.content).toBe("plain text, no encoding specified");
+  });
+
+  it("lists open PRs whose head branch starts with the given prefix", async () => {
+    await adapter.createBranch("cimisy/alice/posts/a", "main");
+    await adapter.createBranch("cimisy/bob/posts/b", "main");
+    await adapter.createBranch("someone-else/unrelated-branch", "main");
+    const prA = await adapter.openChangeRequest({ sourceRef: "cimisy/alice/posts/a", targetRef: "main", title: "Alice's draft" });
+    await adapter.openChangeRequest({ sourceRef: "cimisy/bob/posts/b", targetRef: "main", title: "Bob's draft" });
+    await adapter.openChangeRequest({ sourceRef: "someone-else/unrelated-branch", targetRef: "main", title: "Unrelated PR" });
+
+    const drafts = await adapter.listChangeRequests({ headPrefix: "cimisy/" });
+    expect(drafts).toHaveLength(2);
+    expect(drafts.map((d) => d.sourceRef).sort()).toEqual(["cimisy/alice/posts/a", "cimisy/bob/posts/b"]);
+    const found = drafts.find((d) => d.sourceRef === "cimisy/alice/posts/a");
+    expect(found).toMatchObject({ id: prA.id, title: "Alice's draft", url: prA.url, state: "open" });
+    expect(found?.updatedAt).toBeTruthy();
+  });
+
+  it("excludes a merged PR from listChangeRequests once it's no longer open", async () => {
+    await adapter.createBranch("cimisy/alice/posts/a", "main");
+    const pr = await adapter.openChangeRequest({ sourceRef: "cimisy/alice/posts/a", targetRef: "main", title: "Alice's draft" });
+    await adapter.mergeChangeRequest(pr.id);
+    const drafts = await adapter.listChangeRequests({ headPrefix: "cimisy/" });
+    expect(drafts).toHaveLength(0);
+  });
+
   it("throws a descriptive error when the App isn't installed on the repo", async () => {
     const uninstalledAdapter = new GithubStorageAdapter({
       repo: "someone-else/other-repo",

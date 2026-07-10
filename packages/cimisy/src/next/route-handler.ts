@@ -4,18 +4,26 @@ import type { z } from "zod";
 import type { CimisyConfig } from "../config/define-config.js";
 import { deleteEntry, listEntries, readEntry, resolveEntrySlug, writeEntry } from "../content/collection-store.js";
 import { ensureDraftBranchAndPr } from "../content/draft-workflow.js";
+import {
+  assertConfiguredDirectory,
+  assertPathUnderConfiguredDirectory,
+  buildMediaPath,
+  decodeUploadedImage,
+  getConfiguredImageDirectories,
+  sniffImageType,
+} from "../content/media.js";
 import { resolveRole } from "../rbac/resolve-role.js";
 import { readUserRoster, writeUserRoster } from "../rbac/user-store.js";
-import { draftBranchName } from "../shared/branch-name.js";
+import { draftBranchName, parseDraftBranchName } from "../shared/branch-name.js";
 import { CimisyError, ConflictError, ForbiddenError, NotFoundError, RateLimitedError, ValidationError } from "../shared/errors.js";
 import { isGithubSource } from "../shared/github-source-shape.js";
-import { assertSafeSlug, entryPathForSlug } from "../shared/slug.js";
+import { assertSafeRepoPath, assertSafeSlug, entryPathForSlug } from "../shared/slug.js";
 import type { Actor } from "./actor.js";
 import { DEFAULT_REF, resolveActor } from "./actor.js";
 import { handleCallback, handleLogin, handleLogout } from "./auth-routes.js";
 import { requireSameOrigin } from "./csrf.js";
 import { handlePreviewDisable, handlePreviewEnable } from "./draft-mode.js";
-import { deleteEntryBodySchema, setUserRoleBodySchema, writeEntryBodySchema } from "./request-schemas.js";
+import { deleteEntryBodySchema, setUserRoleBodySchema, uploadMediaBodySchema, writeEntryBodySchema } from "./request-schemas.js";
 import { SESSION_COOKIE_NAME, verifySessionToken } from "./session.js";
 
 /** Not a real content path — RBAC's path-glob matching treats any string the same way, and a "**" rule already matches this, so no changes needed to rbac/glob.ts. */
@@ -63,6 +71,11 @@ function parseHistoryRoute(routeParams: string[]): { collectionName: string; slu
   return { collectionName: routeParams[1], slug: routeParams[2] };
 }
 
+function parseDraftMergeRoute(routeParams: string[]): { id: string } | null {
+  if (routeParams[0] !== "drafts" || !routeParams[1] || routeParams[2] !== "merge" || routeParams.length !== 3) return null;
+  return { id: routeParams[1] };
+}
+
 /** Parses the request body against the given schema, turning malformed JSON or a mismatched shape into a clean ValidationError (400) instead of an unchecked cast or an uncaught SyntaxError (500). */
 async function parseJsonBody<Schema extends z.ZodTypeAny>(request: NextRequest, schema: Schema): Promise<z.infer<Schema>> {
   let raw: unknown;
@@ -76,6 +89,22 @@ async function parseJsonBody<Schema extends z.ZodTypeAny>(request: NextRequest, 
     throw new ValidationError("Request body failed validation.", result.error.issues);
   }
   return result.data;
+}
+
+/**
+ * Media reads (list/raw) accept an optional `?ref=` so the media browser
+ * can show images that only exist on a draft branch (not deployed to the
+ * default branch yet). Restricted to the default ref or a well-formed
+ * `cimisy/*` draft branch — never an arbitrary client-supplied ref — since
+ * this is handed straight to the storage adapter as a git ref to read
+ * from.
+ */
+function resolveSafeRef(refParam: string | null): string {
+  if (!refParam || refParam === DEFAULT_REF) return DEFAULT_REF;
+  if (!parseDraftBranchName(refParam)) {
+    throw new ValidationError(`"${refParam}" is not a valid ref.`, null);
+  }
+  return refParam;
 }
 
 /** Keyed by identity (not IP): the abuse case here is a compromised/buggy authenticated client hammering writes, not anonymous traffic — IP-keying would be trivially bypassed by anyone who can already authenticate. */
@@ -333,6 +362,216 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
     }
   }
 
+  /**
+   * Lists open drafts (branches under `cimisy/`) the caller is allowed to
+   * see: their own drafts (they wrote them), plus anyone's draft they have
+   * `publish` permission to review. Per-PR failures (an unparseable branch
+   * name, a since-removed collection) are skipped rather than aborting the
+   * whole list — the same per-item error isolation collection-store.ts
+   * uses for entry listing.
+   */
+  async function handleDraftsList(request: NextRequest): Promise<NextResponse> {
+    try {
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      if (!cimisyConfig.source.capabilities.pullRequests || !cimisyConfig.source.listChangeRequests) {
+        return NextResponse.json({ drafts: [] });
+      }
+
+      const summaries = await cimisyConfig.source.listChangeRequests({ headPrefix: "cimisy/" });
+      const drafts = [];
+      for (const summary of summaries) {
+        const parsed = parseDraftBranchName(summary.sourceRef);
+        if (!parsed) continue;
+        const def = cimisyConfig.collections[parsed.collectionName];
+        if (!def) continue;
+        const entryPath = `${def.directory}/${parsed.slug}${def.extension}`;
+        let canMerge = false;
+        try {
+          actor.requirePermission("publish", entryPath);
+          canMerge = true;
+        } catch {
+          // not a reviewer for this entry — fine, might still be their own draft
+        }
+        const isOwnDraft = parsed.username === actor.login;
+        if (!isOwnDraft && !canMerge) continue;
+        drafts.push({
+          id: summary.id,
+          title: summary.title,
+          url: summary.url,
+          state: summary.state,
+          updatedAt: summary.updatedAt,
+          author: summary.author,
+          collectionName: parsed.collectionName,
+          slug: parsed.slug,
+          branch: summary.sourceRef,
+          canMerge,
+        });
+      }
+      return NextResponse.json({ drafts });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  /**
+   * Approves and merges a draft — the in-CMS counterpart to clicking
+   * "Merge" on GitHub. The PR is looked up server-side by id (never a
+   * client-supplied ref) so what actually gets merged is always whatever
+   * the adapter itself reports as open under that id, not whatever the
+   * client claims. This is the first route that enforces the `publish`
+   * action (previously declared in DEFAULT_ROLES but never checked
+   * anywhere) — reviewing/merging someone else's draft is exactly the
+   * "publish" capability, distinct from "write" (which only lets you draft
+   * your own changes).
+   */
+  async function handleDraftMerge(request: NextRequest, id: string): Promise<NextResponse> {
+    try {
+      requireSameOrigin(request);
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      if (
+        !cimisyConfig.source.capabilities.pullRequests ||
+        !cimisyConfig.source.listChangeRequests ||
+        !cimisyConfig.source.mergeChangeRequest
+      ) {
+        return NextResponse.json({ error: "Merging drafts requires an adapter with pull request support." }, { status: 404 });
+      }
+      // Shares the write-rate-limit budget rather than a third key
+      // namespace — merges are an infrequent reviewer action, not worth a
+      // separately-tunable limiter.
+      await enforceWriteRateLimit(cimisyConfig, actor);
+
+      const summaries = await cimisyConfig.source.listChangeRequests({ headPrefix: "cimisy/" });
+      const target = summaries.find((s) => s.id === id);
+      if (!target) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      const parsed = parseDraftBranchName(target.sourceRef);
+      if (!parsed) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      const def = cimisyConfig.collections[parsed.collectionName];
+      if (!def) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      const entryPath = `${def.directory}/${parsed.slug}${def.extension}`;
+      actor.requirePermission("publish", entryPath);
+
+      try {
+        await cimisyConfig.source.mergeChangeRequest(id);
+      } catch {
+        return NextResponse.json(
+          { error: "This draft could not be merged automatically — resolve conflicts on GitHub." },
+          { status: 409 },
+        );
+      }
+      return NextResponse.json({ ok: true });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  /**
+   * Uploads an image, sniffing its real format from bytes (never trusting
+   * the client-claimed extension/content-type — see content/media.ts) and
+   * writing it through the same draft-vs-direct envelope an entry save
+   * uses, so an editor's upload lands on the same branch as the entry
+   * they're editing.
+   */
+  async function handleMediaUpload(request: NextRequest): Promise<NextResponse> {
+    try {
+      requireSameOrigin(request);
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      await enforceWriteRateLimit(cimisyConfig, actor);
+
+      const body = await parseJsonBody(request, uploadMediaBodySchema);
+      assertSafeSlug(body.slug);
+      const configuredDirectories = getConfiguredImageDirectories(cimisyConfig);
+      assertConfiguredDirectory(body.directory, configuredDirectories);
+
+      const { type } = decodeUploadedImage(body.content);
+      const path = buildMediaPath(body.directory, body.filename, type.extension);
+      actor.requirePermission("write", path);
+
+      const { ref, publish } = await resolveWriteRef(actor, body.collectionName, body.slug);
+
+      const result = await cimisyConfig.source.commitChange({
+        ref,
+        baseVersion: null, // a fresh randomized filename "already existing" would mean a genuine collision — surfaced below, not silently retried/overwritten
+        message: `Upload ${path}`,
+        author: actor.author,
+        writes: [{ path, content: body.content, encoding: "base64" }],
+      });
+      if (result.conflict) {
+        return NextResponse.json({ error: "A file with this name already exists — please try again." }, { status: 409 });
+      }
+      return NextResponse.json({ path, contentType: type.contentType, publish });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  /** Lists uploaded files under one configured image directory — the browse-existing picker in the image field UI. */
+  async function handleMediaList(request: NextRequest): Promise<NextResponse> {
+    try {
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+      const url = new URL(request.url);
+      const directory = url.searchParams.get("directory");
+      if (!directory) return NextResponse.json({ error: 'Missing "directory" query parameter.' }, { status: 400 });
+      const configuredDirectories = getConfiguredImageDirectories(cimisyConfig);
+      assertConfiguredDirectory(directory, configuredDirectories);
+      actor.requirePermission("read", directory);
+
+      const ref = resolveSafeRef(url.searchParams.get("ref"));
+      const files = await cimisyConfig.source.list(directory, ref);
+      return NextResponse.json({ files });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  /**
+   * Streams an uploaded file's raw bytes through the API (rather than
+   * requiring direct repo access) — this is how the admin UI shows
+   * thumbnails for images on a draft branch that was never deployed. Path
+   * is confined to configured image directories independent of RBAC (a
+   * `read` rule of "**" would otherwise let this double as a generic
+   * repo-file-exfiltration endpoint), and the response always carries
+   * X-Content-Type-Options: nosniff since Content-Type here is
+   * best-effort (sniffed from bytes, or the adapter's own guess).
+   */
+  async function handleMediaRaw(request: NextRequest): Promise<NextResponse> {
+    try {
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+      const url = new URL(request.url);
+      const path = url.searchParams.get("path");
+      if (!path) return NextResponse.json({ error: 'Missing "path" query parameter.' }, { status: 400 });
+      assertSafeRepoPath(path);
+      const configuredDirectories = getConfiguredImageDirectories(cimisyConfig);
+      assertPathUnderConfiguredDirectory(path, configuredDirectories);
+      actor.requirePermission("read", path);
+
+      const ref = resolveSafeRef(url.searchParams.get("ref"));
+      if (!cimisyConfig.source.readRaw) {
+        return NextResponse.json({ error: "Media reads require an adapter with raw file support." }, { status: 404 });
+      }
+      const raw = await cimisyConfig.source.readRaw(path, ref);
+      if (!raw) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+      const buffer = Buffer.from(raw.content);
+      const contentType = raw.contentType ?? sniffImageType(buffer)?.contentType ?? "application/octet-stream";
+      return new NextResponse(buffer, {
+        headers: {
+          "Content-Type": contentType,
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "private, max-age=60",
+        },
+      });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
   // Next 14 passes `params` as a plain object; Next 15 made it a Promise.
   // `await` resolves either form correctly (awaiting a non-thenable value
   // just yields that value), so one handler shape supports both.
@@ -348,6 +587,9 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       if (route[0] === "preview" && route[1] === "enable") return handlePreviewEnable(request, cimisyConfig);
       if (route[0] === "preview" && route[1] === "disable") return handlePreviewDisable(request);
       if (route[0] === "users") return handleUsersGet(request);
+      if (route[0] === "drafts") return handleDraftsList(request);
+      if (route[0] === "media" && route[1] === "raw") return handleMediaRaw(request);
+      if (route[0] === "media") return handleMediaList(request);
       if (route[3] === "history") return handleHistory(request, { route });
       return handleGet(request, { route });
     },
@@ -358,6 +600,12 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
         if (authResponse) return authResponse;
       }
       if (route[0] === "users") return handleUsersPost(request);
+      if (route[0] === "drafts") {
+        const parsed = parseDraftMergeRoute(route);
+        if (!parsed) return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return handleDraftMerge(request, parsed.id);
+      }
+      if (route[0] === "media") return handleMediaUpload(request);
       return handlePost(request, { route });
     },
     PUT: async (request: NextRequest, context: { params: RouteParams }) => handlePost(request, await context.params),

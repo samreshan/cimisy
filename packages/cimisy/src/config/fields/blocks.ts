@@ -33,6 +33,14 @@ export interface BlockDefinition<Props = Record<string, unknown>> {
    * safe to send straight to the client as part of the admin manifest.
    */
   readonly uiOptions?: Record<string, unknown>;
+  /**
+   * Name of the prop (if any) that holds `InlineNode[]` rich text (see
+   * mdx/inline.ts) — e.g. `"content"` for paragraph/callout. Lets the
+   * admin editor (M6) know which prop to hand to the rich-text editor
+   * versus a plain input; `undefined` for blocks with no rich-text prop
+   * (heading/code/image, and any custom block that doesn't opt in).
+   */
+  readonly richTextProp?: string;
   /** Builds this block's mdast node from already-validated props. Never string-concatenates into MDX source. */
   toMdxNode(props: Props): Content;
   /** True if a (validator-approved) mdast node represents this block kind. */

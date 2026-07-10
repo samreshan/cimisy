@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import type { ComponentType, JSX, ReactNode } from "react";
+import type { InlineNode } from "../mdx/inline.js";
 
 export interface BlockNodeLike {
   type: string;
@@ -10,8 +11,39 @@ export interface BlockNodeLike {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type BlockComponents = Record<string, ComponentType<any>>;
 
-function Paragraph({ text }: { text: string }) {
-  return createElement("p", null, text);
+/**
+ * Renders an already-validated InlineNode[] tree (see mdx/inline.ts). By
+ * the time content reaches here it's passed through assertSafeMdxTree +
+ * the inline zod schema's isSafeUrl refine, but link hrefs are re-checked
+ * here too — the same defense-in-depth posture as the rest of the mdx
+ * pipeline, since this function is also reachable with hand-constructed
+ * props via a custom `components` map.
+ */
+function renderInline(nodes: InlineNode[]): ReactNode[] {
+  return nodes.map((node, index) => {
+    switch (node.type) {
+      case "text":
+        return node.text;
+      case "strong":
+        return createElement("strong", { key: index }, renderInline(node.children));
+      case "emphasis":
+        return createElement("em", { key: index }, renderInline(node.children));
+      case "inlineCode":
+        return createElement("code", { key: index }, node.code);
+      case "link":
+        return isSafeLinkHref(node.href)
+          ? createElement("a", { key: index, href: node.href, rel: "noopener noreferrer" }, renderInline(node.children))
+          : createElement("span", { key: index }, renderInline(node.children));
+    }
+  });
+}
+
+function isSafeLinkHref(href: string): boolean {
+  return !/^\s*(javascript|vbscript|data):/i.test(href);
+}
+
+function Paragraph({ content }: { content: InlineNode[] }) {
+  return createElement("p", null, renderInline(content));
 }
 
 function Heading({ level, text }: { level: number; text: string }) {
@@ -30,8 +62,8 @@ function Image({ src, alt }: { src: string; alt: string }) {
   return createElement("img", { src, alt });
 }
 
-function Callout({ tone, text }: { tone: string; text: string }) {
-  return createElement("div", { "data-cimisy-callout": tone }, text);
+function Callout({ tone, content }: { tone: string; content: InlineNode[] }) {
+  return createElement("div", { "data-cimisy-callout": tone }, renderInline(content));
 }
 
 /**

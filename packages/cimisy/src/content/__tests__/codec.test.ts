@@ -17,8 +17,8 @@ describe("serializeEntry / parseEntry round-trip", () => {
       slug: "hello-world",
       publishedAt: new Date("2026-01-15T00:00:00.000Z"),
       body: [
-        { type: "paragraph", id: "1", props: { text: "First paragraph." } },
-        { type: "paragraph", id: "2", props: { text: "Second paragraph." } },
+        { type: "paragraph", id: "1", props: { content: [{ type: "text", text: "First paragraph." }] } },
+        { type: "paragraph", id: "2", props: { content: [{ type: "text", text: "Second paragraph." }] } },
       ],
     };
     const raw = serializeEntry(schema, values);
@@ -30,8 +30,8 @@ describe("serializeEntry / parseEntry round-trip", () => {
     expect(parsed.slug).toBe("hello-world");
     expect((parsed.publishedAt as Date).toISOString()).toBe("2026-01-15T00:00:00.000Z");
     expect(parsed.body).toEqual([
-      { type: "paragraph", id: expect.any(String), props: { text: "First paragraph." } },
-      { type: "paragraph", id: expect.any(String), props: { text: "Second paragraph." } },
+      { type: "paragraph", id: expect.any(String), props: { content: [{ type: "text", text: "First paragraph." }] } },
+      { type: "paragraph", id: expect.any(String), props: { content: [{ type: "text", text: "Second paragraph." }] } },
     ]);
   });
 

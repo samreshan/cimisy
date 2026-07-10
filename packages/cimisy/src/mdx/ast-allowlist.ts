@@ -5,6 +5,7 @@ import type { Content, Root } from "mdast";
 import "mdast-util-mdx";
 import type { BlockDefinition } from "../config/fields/blocks.js";
 import { ValidationError } from "../shared/errors.js";
+import { isSafeUrl } from "./inline.js";
 
 type AnyNode = Content | Root;
 
@@ -78,6 +79,18 @@ function walk(node: AnyNode, allowedJsxNames: Set<string>, depth: number): void 
       if (attr.value !== null && attr.value !== undefined && typeof attr.value === "object") {
         throw new ValidationError(`Attribute "${attr.name}" on <${node.name}> must be a literal, not an expression.`, null);
       }
+    }
+  }
+  // Defense in depth for inline links (mdx/inline.ts's zod schema is the
+  // primary gate on the write path): a hand-edited repo file never goes
+  // through that schema at all, so a `[text](javascript:...)` link
+  // authored directly in a .mdx file must be caught here, on the one path
+  // every piece of content — UI-authored or hand-edited — is guaranteed
+  // to pass through.
+  if (node.type === "link" && "url" in node) {
+    const url = (node as unknown as { url: unknown }).url;
+    if (typeof url !== "string" || !isSafeUrl(url)) {
+      throw new ValidationError(`Link URL "${String(url)}" uses an unsafe or unrecognized scheme.`, null);
     }
   }
   if ("children" in node && Array.isArray((node as { children?: unknown }).children)) {

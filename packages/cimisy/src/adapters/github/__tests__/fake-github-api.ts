@@ -19,6 +19,8 @@ export interface FakeGithubApi {
   filesOnBranch(branch: string): Map<string, string>;
   /** Directly commits a file to the default branch, outside of any adapter call — for seeding fixture state (e.g. a pre-existing .cimisy/users.yaml) before a test exercises the real read/write path. */
   seedFile(path: string, content: string): void;
+  /** Directly opens an already-existing open PR, outside of any adapter call — for seeding drafts-listing fixture state without exercising the full branch+PR creation flow. */
+  seedPullRequest(input: { head: string; base: string; title: string; authorLogin: string }): { number: number; url: string };
   install(): void;
   restore(): void;
 }
@@ -43,13 +45,22 @@ export function createFakeGithubApi(options: {
     { treeSha: string; parents: string[]; message: string; author: { name: string; email: string; date: string }; authorId: number }
   >();
   const trees = new Map<string, Array<{ path: string; sha: string | null }>>();
-  const blobStore = new Map<string, string>();
-  const pullRequests: Array<{ number: number; head: string; base: string; state: "open" | "closed"; title: string; url: string }> = [];
+  const blobStore = new Map<string, { content: string; encoding: "utf-8" | "base64" }>();
+  const pullRequests: Array<{
+    number: number;
+    head: string;
+    base: string;
+    state: "open" | "closed";
+    title: string;
+    url: string;
+    updatedAt: string;
+    authorLogin: string;
+  }> = [];
 
   const initialEntries: Array<{ path: string; sha: string }> = [];
   for (const [path, content] of Object.entries(options.initialFiles ?? {})) {
     const sha = blobSha(content);
-    blobStore.set(sha, content);
+    blobStore.set(sha, { content, encoding: "utf-8" });
     initialEntries.push({ path, sha });
   }
   commits.set("commit-0", {
@@ -87,17 +98,24 @@ export function createFakeGithubApi(options: {
     return result;
   }
 
-  function filesOnBranch(branch: string): Map<string, string> {
+  function blobsOnBranch(branch: string): Map<string, { content: string; encoding: "utf-8" | "base64" }> {
     const headSha = branches.get(branch);
     if (!headSha) return new Map();
     const commit = commits.get(headSha);
     if (!commit) return new Map();
     const resolved = resolveTree(commit.treeSha);
-    const result = new Map<string, string>();
+    const result = new Map<string, { content: string; encoding: "utf-8" | "base64" }>();
     for (const [filePath, sha] of resolved) {
-      const content = blobStore.get(sha);
-      if (content !== undefined) result.set(filePath, content);
+      const blob = blobStore.get(sha);
+      if (blob !== undefined) result.set(filePath, blob);
     }
+    return result;
+  }
+
+  /** Decoded content only (no encoding info) — the shape most tests want when asserting on committed file content. */
+  function filesOnBranch(branch: string): Map<string, string> {
+    const result = new Map<string, string>();
+    for (const [filePath, blob] of blobsOnBranch(branch)) result.set(filePath, blob.content);
     return result;
   }
 
@@ -138,20 +156,23 @@ export function createFakeGithubApi(options: {
     if (method === "GET" && contentsMatch) {
       const requestedPath = contentsMatch[1] ?? "";
       const ref = u.searchParams.get("ref") ?? defaultBranch;
-      const files = filesOnBranch(ref);
-      if (files.has(requestedPath)) {
-        const content = files.get(requestedPath)!;
+      const blobs = blobsOnBranch(ref);
+      if (blobs.has(requestedPath)) {
+        const blob = blobs.get(requestedPath)!;
+        // The real Contents API always returns base64 regardless of the
+        // blob's original encoding — mirror that here.
+        const base64Content = blob.encoding === "base64" ? blob.content : Buffer.from(blob.content, "utf8").toString("base64");
         return json({
           type: "file",
           path: requestedPath,
-          content: Buffer.from(content, "utf8").toString("base64"),
-          sha: blobSha(content),
+          content: base64Content,
+          sha: blobSha(blob.content),
         });
       }
       const prefix = requestedPath.length > 0 ? `${requestedPath}/` : "";
-      const dirEntries = [...files.keys()]
+      const dirEntries = [...blobs.keys()]
         .filter((p) => p.startsWith(prefix) && !p.slice(prefix.length).includes("/"))
-        .map((p) => ({ type: "file" as const, path: p, sha: blobSha(files.get(p)!) }));
+        .map((p) => ({ type: "file" as const, path: p, sha: blobSha(blobs.get(p)!.content) }));
       if (dirEntries.length === 0) return notFound();
       return json(dirEntries);
     }
@@ -184,8 +205,9 @@ export function createFakeGithubApi(options: {
 
     if (method === "POST" && path === `/repos/${options.owner}/${options.repo}/git/blobs`) {
       const content = body.content as string;
+      const encoding = body.encoding === "base64" ? "base64" : "utf-8";
       const sha = blobSha(content);
-      blobStore.set(sha, content);
+      blobStore.set(sha, { content, encoding });
       return json({ sha }, 201);
     }
 
@@ -263,7 +285,16 @@ export function createFakeGithubApi(options: {
       }
       const number = prCounter++;
       const prUrl = `https://github.com/${options.owner}/${options.repo}/pull/${number}`;
-      pullRequests.push({ number, head, base, state: "open", title: String(body.title ?? ""), url: prUrl });
+      pullRequests.push({
+        number,
+        head,
+        base,
+        state: "open",
+        title: String(body.title ?? ""),
+        url: prUrl,
+        updatedAt: new Date().toISOString(),
+        authorLogin: "test-user",
+      });
       return json({ number, html_url: prUrl }, 201);
     }
 
@@ -278,7 +309,18 @@ export function createFakeGithubApi(options: {
           (!baseParam || pr.base === baseParam) &&
           (stateParam === "all" || pr.state === stateParam),
       );
-      return json(matches.map((pr) => ({ number: pr.number, html_url: pr.url, title: pr.title })));
+      return json(
+        matches.map((pr) => ({
+          number: pr.number,
+          html_url: pr.url,
+          title: pr.title,
+          head: { ref: pr.head },
+          base: { ref: pr.base },
+          state: pr.state,
+          updated_at: pr.updatedAt,
+          user: { login: pr.authorLogin },
+        })),
+      );
     }
 
     const mergeMatch = /^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/merge$/.exec(path);
@@ -287,6 +329,7 @@ export function createFakeGithubApi(options: {
       const pr = pullRequests.find((p) => p.number === number);
       if (!pr) return notFound();
       pr.state = "closed";
+      pr.updatedAt = new Date().toISOString();
       return json({ merged: true });
     }
 
@@ -305,7 +348,7 @@ export function createFakeGithubApi(options: {
     },
     seedFile(path, content) {
       const sha = blobSha(content);
-      blobStore.set(sha, content);
+      blobStore.set(sha, { content, encoding: "utf-8" });
       const headSha = branches.get(defaultBranch)!;
       const headCommit = commits.get(headSha)!;
       const baseEntries = trees.get(headCommit.treeSha) ?? [];
@@ -320,6 +363,21 @@ export function createFakeGithubApi(options: {
         authorId: 0,
       });
       branches.set(defaultBranch, newCommitSha);
+    },
+    seedPullRequest({ head, base, title, authorLogin }) {
+      const number = prCounter++;
+      const url = `https://github.com/${options.owner}/${options.repo}/pull/${number}`;
+      pullRequests.push({
+        number,
+        head,
+        base,
+        state: "open",
+        title,
+        url,
+        updatedAt: new Date().toISOString(),
+        authorLogin,
+      });
+      return { number, url };
     },
     install() {
       originalFetch = global.fetch;
