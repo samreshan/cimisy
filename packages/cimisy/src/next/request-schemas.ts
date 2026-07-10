@@ -10,7 +10,7 @@ import { z } from "zod";
  * (an object, not a string/array/null) before it's passed further in.
  */
 export const writeEntryBodySchema = z.object({
-  values: z.record(z.unknown()),
+  values: z.record(z.string(), z.unknown()),
   baseVersion: z.string().nullable().optional(),
 });
 
