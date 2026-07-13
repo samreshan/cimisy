@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react";
-import type { CollectionManifest } from "../../next/manifest.js";
 import { type HistoryEntryLike, apiUrl } from "./api.js";
 
-/** The activity-log UI: surfaces git history for an entry (see next/route-handler.ts's /history route). Hides itself when the storage adapter doesn't support history (e.g. the local adapter) rather than showing an empty/broken section. */
-export function HistoryPanel({ collection, slug, apiBasePath }: { collection: CollectionManifest; slug: string; apiBasePath: string }) {
+/** The activity-log UI: surfaces git history for an entry or singleton (see next/route-handler.ts's /history routes — the caller passes the API path, e.g. "/collections/posts/hello/history" or "/singletons/settings/history"). Hides itself when the storage adapter doesn't support history (e.g. the local adapter) rather than showing an empty/broken section. */
+export function HistoryPanel({ historyPath, apiBasePath }: { historyPath: string; apiBasePath: string }) {
   const [state, setState] = useState<{ supported: boolean; history: HistoryEntryLike[] } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetch(apiUrl(apiBasePath, `/collections/${collection.name}/${slug}/history`))
+    fetch(apiUrl(apiBasePath, historyPath))
       .then((res) => res.json())
       .then((data: { supported: boolean; history: HistoryEntryLike[] }) => {
         if (!cancelled) setState(data);
@@ -19,7 +18,7 @@ export function HistoryPanel({ collection, slug, apiBasePath }: { collection: Co
     return () => {
       cancelled = true;
     };
-  }, [collection.name, slug, apiBasePath]);
+  }, [historyPath, apiBasePath]);
 
   if (!state?.supported) return null;
 

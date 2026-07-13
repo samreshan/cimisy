@@ -3,7 +3,8 @@ import path from "node:path";
 import ts from "typescript";
 import { humanizeLabel, insertCollectionIntoConfig, scaffoldConfigFile } from "../codegen/insert-collection-config.js";
 import { rewriteArraySource } from "../codegen/rewrite-array-source.js";
-import { collection, type CollectionDefinition } from "../config/collection.js";
+import { collection } from "../config/collection.js";
+import type { NormalizedCollection } from "../config/define-config.js";
 import { fields } from "../config/fields/index.js";
 import type { FieldDefinition } from "../config/fields/types.js";
 import { writeEntry } from "../content/collection-store.js";
@@ -167,12 +168,24 @@ export async function applyCandidate(options: ApplyCandidateOptions): Promise<Ap
   const rootDir = path.resolve(path.dirname(configFilePath), detection.rootDir);
   const adapter = new LocalStorageAdapter({ rootDir, allowInProduction: true });
   const schema = buildRuntimeSchema(candidate.proposal, collectionName);
-  const def: CollectionDefinition = collection({
+  const collectionDef = collection({
     label: collectionLabel,
     path: contentPath,
     slugField: candidate.proposal.slugField,
     schema,
   });
+  // writeEntry consumes the normalized shape; a scan import is always a
+  // top-level collection with an explicit path, so this is a direct lift.
+  const def: NormalizedCollection = {
+    key: collectionName,
+    label: collectionDef.label,
+    path: collectionDef.path!,
+    directory: collectionDef.directory!,
+    extension: collectionDef.extension!,
+    slugField: collectionDef.slugField,
+    schema: collectionDef.schema,
+    previewPath: collectionDef.previewPath,
+  };
 
   const items: ApplyItemResult[] = [];
   for (const [index, item] of candidate.items.entries()) {

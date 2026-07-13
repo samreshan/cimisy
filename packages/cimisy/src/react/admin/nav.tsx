@@ -20,7 +20,7 @@ export function TopNav({
       </a>
       <div className="cimisy-nav-links">
         <a className="cimisy-nav-link" href={basePath}>
-          Collections
+          Content
         </a>
         {draftsSupported && (
           <a className="cimisy-nav-link" href={`${basePath}/drafts`}>

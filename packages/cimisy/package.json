@@ -57,6 +57,10 @@
     "./render": {
       "types": "./dist/react/render-blocks.d.ts",
       "import": "./dist/react/render-blocks.js"
+    },
+    "./seo": {
+      "types": "./dist/seo/index.d.ts",
+      "import": "./dist/seo/index.js"
     }
   },
   "bin": {

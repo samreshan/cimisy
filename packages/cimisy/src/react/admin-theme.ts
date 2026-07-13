@@ -539,6 +539,50 @@ a.cimisy-card:hover {
   border-radius: var(--cimisy-radius-lg);
   background: #fff;
 }
+/* Page group cards on the content-tree home screen (v3 hierarchy). */
+.cimisy-page-group {
+  border: 1px solid var(--cimisy-border);
+  border-radius: var(--cimisy-radius-lg);
+  padding: 14px 16px;
+  background: #fffdf8;
+}
+.cimisy-page-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+.cimisy-page-group-label {
+  font-weight: 600;
+}
+.cimisy-page-group-children {
+  margin-left: 12px;
+}
+/* Collapsed SEO panel (fields.seo). */
+.cimisy-seo-panel {
+  border: 1px solid var(--cimisy-border);
+  border-radius: var(--cimisy-radius-lg);
+  padding: 12px 14px;
+  background: #fffdf8;
+}
+.cimisy-seo-toggle {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.cimisy-seo-body {
+  margin-top: 14px;
+  border-top: 1px solid var(--cimisy-border);
+  padding-top: 14px;
+}
 /* Below this width a side-by-side split leaves neither column usable — stack instead. */
 @media (max-width: 860px) {
   .cimisy-entry-layout {

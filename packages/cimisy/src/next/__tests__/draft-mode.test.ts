@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import { createFakeGithubApi, type FakeGithubApi } from "../../adapters/github/__tests__/fake-github-api.js";
 import { githubSource } from "../../adapters/github/adapter.js";
-import type { CimisyConfig } from "../../config/define-config.js";
+import type { ResolvedCimisyConfig } from "../../config/define-config.js";
 import { collection, config, fields } from "../../config/index.js";
 import { createSessionToken } from "../session.js";
 
@@ -25,7 +25,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
 
 const SESSION_SECRET = "test-session-secret";
 
-function buildConfig(fake: FakeGithubApi): CimisyConfig {
+function buildConfig(fake: FakeGithubApi): ResolvedCimisyConfig {
   return config({
     source: githubSource({
       repo: `${fake.owner}/${fake.repo}`,
@@ -80,7 +80,7 @@ function seedRoster(fake: FakeGithubApi, records: Array<{ githubId: string; gith
 
 describe("handlePreviewEnable", () => {
   let fake: FakeGithubApi;
-  let cimisyConfig: CimisyConfig;
+  let cimisyConfig: ResolvedCimisyConfig;
 
   beforeEach(() => {
     fake = createFakeGithubApi({ owner: "acme", repo: "site", initialFiles: {} });

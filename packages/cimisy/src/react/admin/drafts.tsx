@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { AdminManifest } from "../../next/manifest.js";
 import { apiUrl } from "./api.js";
-import { buildPreviewUrl } from "./entry-form.js";
+import { buildPreviewUrl, buildSingletonPreviewUrl } from "./entry-form.js";
 
 interface DraftLike {
   id: string;
@@ -12,7 +12,8 @@ interface DraftLike {
   state: "open" | "closed";
   updatedAt: string;
   author?: string;
-  collectionName: string;
+  kind: "collection" | "singleton";
+  contentKey: string;
   slug: string;
   branch: string;
   canMerge: boolean;
@@ -66,7 +67,7 @@ export function DraftsPage({ manifest, basePath, apiBasePath }: { manifest: Admi
   return (
     <div>
       <a className="cimisy-crumb cimisy-link" href={basePath}>
-        &larr; Collections
+        &larr; Content
       </a>
       <h1 className="cimisy-heading">Drafts</h1>
       {error && <p className="cimisy-banner cimisy-banner-danger">{error}</p>}
@@ -77,7 +78,12 @@ export function DraftsPage({ manifest, basePath, apiBasePath }: { manifest: Admi
       ) : (
         <ul className="cimisy-list">
           {drafts.map((d) => {
-            const previewPath = manifest.collections.find((c) => c.name === d.collectionName)?.previewPath;
+            const previewPath = manifest.byKey[d.contentKey]?.previewPath;
+            const previewUrl = previewPath
+              ? d.kind === "singleton"
+                ? buildSingletonPreviewUrl(apiBasePath, d.contentKey, previewPath, d.branch)
+                : buildPreviewUrl(apiBasePath, d.contentKey, d.slug, previewPath, d.branch)
+              : null;
             return (
               <li key={d.id}>
                 <div className="cimisy-card cimisy-team-card">
@@ -85,15 +91,12 @@ export function DraftsPage({ manifest, basePath, apiBasePath }: { manifest: Admi
                     <div className="cimisy-team-name">{d.title}</div>
                     <div className="cimisy-muted" style={{ fontSize: "0.85em" }}>
                       {d.author ? `@${d.author} — ` : ""}
-                      {d.collectionName}/{d.slug}
+                      {d.kind === "singleton" ? d.contentKey : `${d.contentKey}/${d.slug}`}
                     </div>
                   </div>
                   <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    {previewPath && (
-                      <a
-                        className="cimisy-btn cimisy-btn-secondary"
-                        href={buildPreviewUrl(apiBasePath, d.collectionName, d.slug, previewPath, d.branch)}
-                      >
+                    {previewUrl && (
+                      <a className="cimisy-btn cimisy-btn-secondary" href={previewUrl}>
                         Preview
                       </a>
                     )}

@@ -1,9 +1,9 @@
-import type { CimisyConfig } from "../config/define-config.js";
+import type { ResolvedCimisyConfig } from "../config/define-config.js";
 import { AdminApp } from "../react/admin-app.js";
 import { buildAdminManifest } from "./manifest.js";
 
 export interface CimisyAdminPageProps {
-  cimisyConfig: CimisyConfig;
+  cimisyConfig: ResolvedCimisyConfig;
   segments: string[];
   /** URL path the admin UI is mounted at, e.g. "/admin". */
   basePath: string;

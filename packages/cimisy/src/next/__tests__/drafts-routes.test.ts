@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import { createFakeGithubApi, type FakeGithubApi } from "../../adapters/github/__tests__/fake-github-api.js";
 import { githubSource } from "../../adapters/github/adapter.js";
-import type { CimisyConfig } from "../../config/define-config.js";
-import { collection, config, fields } from "../../config/index.js";
+import type { ResolvedCimisyConfig } from "../../config/define-config.js";
+import { collection, config, fields, singleton } from "../../config/index.js";
 import { localSource } from "../../storage/local.js";
 import { createCimisyHandler } from "../route-handler.js";
 import { createSessionToken } from "../session.js";
@@ -18,7 +18,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
 
 const SESSION_SECRET = "test-session-secret";
 
-function buildConfig(fake: FakeGithubApi): CimisyConfig {
+function buildConfig(fake: FakeGithubApi): ResolvedCimisyConfig {
   return config({
     source: githubSource({
       repo: `${fake.owner}/${fake.repo}`,
@@ -38,6 +38,13 @@ function buildConfig(fake: FakeGithubApi): CimisyConfig {
           title: fields.text({ label: "Title", validation: { isRequired: true } }),
           slug: fields.slug({ source: "title" }),
         },
+      }),
+    },
+    singletons: {
+      settings: singleton({
+        label: "Site settings",
+        path: "content/settings.yaml",
+        schema: { siteName: fields.text({ label: "Site name" }) },
       }),
     },
   });
@@ -125,6 +132,28 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       expect(body.drafts.every((d) => d.canMerge)).toBe(true);
     });
 
+    it("lists a singleton draft with kind 'singleton' and its content key (no slug shown)", async () => {
+      fake.seedPullRequest({
+        head: "cimisy/ed-user/settings/singleton",
+        base: "main",
+        title: "Settings draft",
+        authorLogin: "ed-user",
+      });
+      const cookie = await sessionCookieFor("pub-user", "2");
+      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
+      const body = (await res.json()) as { drafts: Array<{ kind: string; contentKey: string; slug: string; canMerge: boolean }> };
+      expect(body.drafts).toHaveLength(1);
+      expect(body.drafts[0]).toMatchObject({ kind: "singleton", contentKey: "settings", slug: "singleton", canMerge: true });
+    });
+
+    it("collection drafts carry kind 'collection' and their content key", async () => {
+      fake.seedPullRequest({ head: "cimisy/ed-user/posts/mine", base: "main", title: "My draft", authorLogin: "ed-user" });
+      const cookie = await sessionCookieFor("pub-user", "2");
+      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
+      const body = (await res.json()) as { drafts: Array<{ kind: string; contentKey: string }> };
+      expect(body.drafts[0]).toMatchObject({ kind: "collection", contentKey: "posts" });
+    });
+
     it("ignores PRs whose branch isn't a well-formed cimisy draft branch (fail closed, don't crash)", async () => {
       fake.seedPullRequest({ head: "cimisy/malformed", base: "main", title: "Weird", authorLogin: "someone" });
       fake.seedPullRequest({ head: "cimisy/ed-user/posts/mine", base: "main", title: "My draft", authorLogin: "ed-user" });
@@ -186,6 +215,27 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       const listRes = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
       const listBody = (await listRes.json()) as { drafts: unknown[] };
       expect(listBody.drafts).toHaveLength(0);
+    });
+
+    it("merging a singleton draft enforces publish on the singleton's own path", async () => {
+      const { number } = fake.seedPullRequest({
+        head: "cimisy/ed-user/settings/singleton",
+        base: "main",
+        title: "Settings draft",
+        authorLogin: "ed-user",
+      });
+      // The editor authored it but lacks publish → 403.
+      const editorCookie = await sessionCookieFor("ed-user", "3");
+      const denied = await handler.POST(req(`http://x/api/cimisy/drafts/${number}/merge`, { method: "POST", headers: { cookie: editorCookie } }), {
+        params: { route: ["drafts", String(number), "merge"] },
+      });
+      expect(denied.status).toBe(403);
+      // A publisher can merge it.
+      const pubCookie = await sessionCookieFor("pub-user", "2");
+      const merged = await handler.POST(req(`http://x/api/cimisy/drafts/${number}/merge`, { method: "POST", headers: { cookie: pubCookie } }), {
+        params: { route: ["drafts", String(number), "merge"] },
+      });
+      expect(merged.status).toBe(200);
     });
 
     it("returns 404 for an unknown draft id", async () => {

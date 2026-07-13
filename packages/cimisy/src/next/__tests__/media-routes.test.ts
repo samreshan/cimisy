@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import { createFakeGithubApi, type FakeGithubApi } from "../../adapters/github/__tests__/fake-github-api.js";
 import { githubSource } from "../../adapters/github/adapter.js";
-import type { CimisyConfig } from "../../config/define-config.js";
+import type { ResolvedCimisyConfig } from "../../config/define-config.js";
 import { collection, config, fields } from "../../config/index.js";
 import { createInMemoryRateLimiter } from "../../security/rate-limit.js";
 import { createCimisyHandler } from "../route-handler.js";
@@ -19,7 +19,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
 const SESSION_SECRET = "test-session-secret";
 const PNG_BASE64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03]).toString("base64");
 
-function buildConfig(fake: FakeGithubApi): CimisyConfig {
+function buildConfig(fake: FakeGithubApi): ResolvedCimisyConfig {
   return config({
     source: githubSource({
       repo: `${fake.owner}/${fake.repo}`,
@@ -103,7 +103,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
         { params: { route: ["media"] } },
       );
@@ -116,7 +116,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { cookie, "content-type": "application/json", origin: "http://evil.example" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
         { params: { route: ["media"] } },
       );
@@ -129,7 +129,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { cookie, "content-type": "application/json" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "My Photo.png", content: PNG_BASE64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "My Photo.png", content: PNG_BASE64 }),
         }),
         { params: { route: ["media"] } },
       );
@@ -159,7 +159,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { cookie, "content-type": "application/json" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
         { params: { route: ["media"] } },
       );
@@ -178,7 +178,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { cookie, "content-type": "application/json" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
         { params: { route: ["media"] } },
       );
@@ -191,7 +191,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { cookie, "content-type": "application/json" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: ".cimisy", filename: "a.png", content: PNG_BASE64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: ".cimisy", filename: "a.png", content: PNG_BASE64 }),
         }),
         { params: { route: ["media"] } },
       );
@@ -205,7 +205,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { cookie, "content-type": "application/json" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "a.svg", content: svgBase64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.svg", content: svgBase64 }),
         }),
         { params: { route: ["media"] } },
       );
@@ -219,7 +219,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { cookie, "content-type": "application/json" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: hugeBase64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: hugeBase64 }),
         }),
         { params: { route: ["media"] } },
       );
@@ -236,7 +236,7 @@ describe("media routes (/media, /media/raw)", () => {
           req("http://x/api/cimisy/media", {
             method: "POST",
             headers: { cookie, "content-type": "application/json" },
-            body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
+            body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
           }),
           { params: { route: ["media"] } },
         );
@@ -254,7 +254,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { cookie, "content-type": "application/json" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
         { params: { route: ["media"] } },
       );
@@ -320,7 +320,7 @@ describe("media routes (/media, /media/raw)", () => {
         req("http://x/api/cimisy/media", {
           method: "POST",
           headers: { cookie: editorCookie, "content-type": "application/json" },
-          body: JSON.stringify({ collectionName: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
+          body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
         { params: { route: ["media"] } },
       );

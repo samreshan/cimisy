@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { CimisyConfig } from "../config/define-config.js";
+import type { ResolvedCimisyConfig } from "../config/define-config.js";
 import type { ImageFieldDefinition } from "../config/fields/image.js";
+import type { SeoFieldDefinition } from "../config/fields/seo.js";
 import { UnsafePathError, ValidationError } from "../shared/errors.js";
 import { slugify } from "../shared/slug.js";
 
@@ -108,13 +109,21 @@ export function assertPathUnderConfiguredDirectory(path: string, configuredDirec
   }
 }
 
-/** Every distinct `directory` any `fields.image()` in the project's schema declares — the allowlist the media API validates uploads/reads against. */
-export function getConfiguredImageDirectories(cimisyConfig: CimisyConfig): string[] {
+/** Every distinct `directory` any `fields.image()` in the project's schemas (collections and singletons alike) declares — the allowlist the media API validates uploads/reads against. */
+export function getConfiguredImageDirectories(cimisyConfig: ResolvedCimisyConfig): string[] {
   const directories = new Set<string>();
-  for (const collection of Object.values(cimisyConfig.collections)) {
-    for (const field of Object.values(collection.schema)) {
+  const schemas = [
+    ...Object.values(cimisyConfig.collectionsByKey).map((def) => def.schema),
+    ...Object.values(cimisyConfig.singletonsByKey).map((def) => def.schema),
+  ];
+  for (const schema of schemas) {
+    for (const field of Object.values(schema)) {
       if (field.kind === "image") {
         directories.add((field as ImageFieldDefinition).directory);
+      }
+      if (field.kind === "seo") {
+        const imageDirectory = (field as SeoFieldDefinition).imageDirectory;
+        if (imageDirectory) directories.add(imageDirectory);
       }
     }
   }

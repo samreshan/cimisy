@@ -13,6 +13,8 @@ A git-based, security-first CMS that installs directly into an existing Next.js 
 - [Using the GitHub adapter](#using-the-github-adapter)
 - [Setting up a GitHub App](#setting-up-a-github-app)
 - [Config reference](#config-reference)
+- [Pages, sections & singletons](#pages-sections--singletons)
+- [SEO](#seo)
 - [RBAC guide](#rbac-guide)
 - [Rich text & media](#rich-text--media)
 - [Drafts & review](#drafts--review)
@@ -151,8 +153,9 @@ The top-level config object, from `cimisy/config`.
 | Option | Type | Required | Notes |
 |---|---|---|---|
 | `source` | `StorageAdapter` | yes | `localSource(...)` or `githubSource(...)` |
-| `collections` | `Record<string, CollectionDefinition>` | yes | see below |
-| `singletons` | `Record<string, SingletonDefinition>` | no | single fixed-path documents (e.g. site settings) |
+| `collections` | `Record<string, CollectionDefinition>` | no | top-level collections, see below |
+| `singletons` | `Record<string, SingletonDefinition>` | no | single fixed-path documents (e.g. site settings) — see [Pages, sections & singletons](#pages-sections--singletons) |
+| `pages` | `Record<string, PageDefinition>` | no | page → section/collection hierarchy — see [Pages, sections & singletons](#pages-sections--singletons) |
 | `roles` | `Record<string, RoleDefinition>` | no | defaults to a built-in admin/publisher/editor/viewer set — see [RBAC guide](#rbac-guide) |
 | `roleMapping` | `Record<string, string>` | no | GitHub permission level → role name, used only for first-admin bootstrap — see [RBAC guide](#rbac-guide) |
 | `rateLimiter` | `RateLimiter` | no | defaults to an in-memory limiter — see [Security](#security) |
@@ -162,14 +165,26 @@ The top-level config object, from `cimisy/config`.
 | Option | Type | Notes |
 |---|---|---|
 | `label` | `string` | shown in the admin UI |
-| `path` | `string` | e.g. `"content/posts/*.mdx"` — a single-segment glob |
+| `path` | `string?` | e.g. `"content/posts/*.mdx"` — a single-segment glob. Required for top-level collections; optional inside a `page()`, where it defaults to `"<pagePath>/<key>/*.mdx"` |
 | `slugField` | `string` | name of a `fields.slug()` field in `schema`, used as the filename |
 | `schema` | `Record<string, FieldDefinition>` | field definitions, see below |
 | `previewPath` | `string` | optional, e.g. `"/blog/:slug"` — enables a "Preview" link in the admin UI |
 
+Collection/singleton/page keys become admin URLs, API route segments, and draft-branch components, so they must be lowercase kebab-case (`my-posts`, not `myPosts`) and may not be `team`, `drafts`, `pages`, or `new` — `config()` rejects anything else at startup.
+
 ### `singleton(options)`
 
-Same shape as `collection`, minus `path` (a singleton is one fixed file, e.g. `"content/settings/site.yaml"`, not a glob) and `slugField`.
+| Option | Type | Notes |
+|---|---|---|
+| `label` | `string` | shown in the admin UI |
+| `path` | `string` | one fixed file, e.g. `"content/settings.yaml"` — not a glob, no slug |
+| `schema` | `Record<string, FieldDefinition>` | field definitions |
+| `format` | `"yaml" \| "mdx"?` | derived from the schema when omitted: `"mdx"` iff any field is a body field (`fields.blocks`), else plain YAML. `"yaml"` + a body field is a config-time error |
+| `previewPath` | `string?` | a fixed route (no `:slug`) — enables the admin Preview link |
+
+### `page(options)` / `section(options)`
+
+See [Pages, sections & singletons](#pages-sections--singletons).
 
 ### `fields`
 
@@ -181,6 +196,7 @@ Same shape as `collection`, minus `path` (a singleton is one fixed file, e.g. `"
 | `fields.image({ label, directory })` | `string \| null` | `directory`: repo-relative path new uploads are written under; the admin UI renders an upload + browse-existing picker for this field — see [Rich text & media](#rich-text--media) |
 | `fields.array(itemField)` | `T[]` | wraps any other field |
 | `fields.blocks({ label?, blocks })` | `BlockNode[]` | `blocks`: a map of block name → `blocks.*` definition (below) — this is the rich-content/MDX body field |
+| `fields.seo({ label?, imageDirectory? })` | `SeoValue` | a collapsed per-entry SEO panel (title/description/canonical/og:image/noindex) — see [SEO](#seo). `imageDirectory` enables the og:image upload picker |
 
 ### `blocks` (for `fields.blocks`)
 
@@ -195,6 +211,88 @@ Built-in block kinds, each returning a `BlockDefinition` that declares its own z
 `paragraph`/`heading`/`code` serialize as native Markdown (no JSX needed — inert by construction). `image`/`callout` serialize as real JSX elements that map to actual React components you provide when rendering (see [Reading content on your site](#reading-content-on-your-site)). You are not limited to the built-ins — any object implementing the `BlockDefinition` interface (`propsSchema`, `toMdxNode`, `matches`, `extractProps`) can be registered the same way; this is what keeps the MDX write path free of string concatenation regardless of which blocks a project defines. A custom block type is still fully editable in the admin UI — the rich editor falls back to a generic props form for any block kind it doesn't have a dedicated node for.
 
 `paragraph`/`callout` props carry rich inline text: `content: InlineNode[]` (a small recursive union — `text` / `strong` / `emphasis` / `inlineCode` / `link`), not a plain string. `heading`/`code` stay plain text/code strings — no bold/italic inside a heading or a fenced code block.
+
+## Pages, sections & singletons
+
+Real sites aren't one flat list of collections — a home page has a hero, some testimonials, maybe a feature grid. v3 lets the config say exactly that, and the admin UI mirrors it:
+
+```ts
+import { collection, config, fields, page, section, singleton } from "cimisy/config";
+
+export default config({
+  source: /* ... */,
+
+  collections: {
+    posts: collection({ /* top-level collections work exactly as before */ }),
+  },
+
+  // One fixed file, editable in the admin — declaring it is all it takes.
+  singletons: {
+    settings: singleton({
+      label: "Site settings",
+      path: "content/settings.yaml",
+      schema: { siteName: fields.text({ label: "Site name" }) },
+    }),
+  },
+
+  // A page groups the content that renders on one route.
+  pages: {
+    home: page({
+      label: "Home",
+      route: "/",                       // drives section preview links
+      // path defaults to "content/pages/home"
+      sections: {
+        hero: section({                 // static content: one file
+          label: "Hero",
+          schema: { heading: fields.text({ label: "Heading" }) },
+        }),
+        testimonials: collection({      // repeating content: a directory
+          label: "Testimonials",
+          slugField: "slug",
+          schema: { quote: fields.text({ label: "Quote" }), slug: fields.slug({ source: "quote" }) },
+        }),
+      },
+    }),
+  },
+});
+```
+
+On disk this mirrors the hierarchy: `content/settings.yaml`, `content/pages/home/hero.yaml`, `content/pages/home/testimonials/<slug>.mdx`. Sections whose schema is all-frontmatter store as plain YAML (no `---` fences); add a `fields.blocks()` body and the file becomes MDX automatically.
+
+Every content target gets a flat key — `posts`, `settings`, `home.hero`, `home.testimonials` — used in admin URLs (`/admin/home.hero`), API routes (`/api/cimisy/singletons/home.hero`), and draft branches (`cimisy/<user>/home.hero/singleton`). RBAC keeps matching real repo paths, so a rule of `{ path: "content/pages/home/**", actions: ["read", "write"] }` scopes a role to exactly one page's content.
+
+Singletons get the full editing lifecycle: optimistic-concurrency saves, draft branches + PRs for non-`directPublish` roles (the Drafts screen lists them alongside entry drafts), history, and live preview via `previewPath` (sections inherit their page's `route`). A never-saved singleton renders as an empty create form — no seed file needed.
+
+## SEO
+
+Everything ships from the `cimisy/seo` export (separate from `cimisy/next` so it works in client components and never pulls `server-only`).
+
+**Per-entry SEO panel.** Add `seo: fields.seo({ imageDirectory: "content/uploads" })` to any schema — entries get a collapsed panel with title/description (character-count hints), canonical URL (schema-validated: `https://` or site-relative only, `javascript:` impossible by construction), og:image through the standard media pipeline, and a noindex toggle.
+
+**`generateMetadata` in one call.** Site-wide defaults live in the conventional settings singleton (`seoSettingsFields()` builds its schema); each page layers the entry's SEO value over its own title/image over those defaults:
+
+```tsx
+import { createMetadata, seoDefaultsFromSettings, type SeoValue } from "cimisy/seo";
+
+export async function generateMetadata({ params }): Promise<Metadata> {
+  const { slug } = await params;
+  const [post, settings] = await Promise.all([
+    reader.collections.posts?.bySlug(slug),
+    reader.singletons.settings?.get(),
+  ]);
+  if (!post) return {};
+  return createMetadata({
+    seo: post.values.seo as SeoValue,
+    fallback: { title: String(post.values.title) },
+    defaults: seoDefaultsFromSettings(settings?.values),
+    path: `/blog/${slug}`,
+  });
+}
+```
+
+That emits title (with the settings' `%s` title template), description, `alternates.canonical` (resolved against `siteUrl`), Open Graph, Twitter card, and `robots` from noindex.
+
+**Structured data.** `articleJsonLd` / `breadcrumbListJsonLd` / `organizationJsonLd` / `webSiteJsonLd` build schema.org objects (each with an `overrides` hook for CMS-editable extras), and `<JsonLd data={...} />` renders them as `application/ld+json` with XSS-hardened serialization — a `</script>` payload typed into a CMS field cannot break out of the script element.
 
 ## RBAC guide
 
@@ -289,6 +387,14 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
 `renderBlocks` renders the validated block tree directly to React — it does not re-serialize to MDX text and recompile, since the content is already validated by the time the Reader returns it. Sensible unstyled defaults ship for all built-in block kinds and are fully overridable per block type. A hand-edited file that never went through the admin UI is still rejected here (same AST allowlist validator as the write path) — the render boundary defends itself regardless of how content got into the repo.
 
 `reader.collections.<name>.all()` lists every entry (parse/validation failures on individual files surface as `{ error }` on that entry rather than failing the whole list); `.bySlug(slug)` fetches one.
+
+The reader also exposes singletons and the page hierarchy:
+
+```ts
+const settings = await reader.singletons.settings?.get();   // { version, values } | null (null until first saved)
+const hero = await reader.pages.home?.hero.get();           // section → SingletonReader
+const quotes = await reader.pages.home?.testimonials.all(); // nested collection → CollectionReader
+```
 
 ## Draft Mode / preview
 

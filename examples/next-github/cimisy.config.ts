@@ -1,5 +1,6 @@
-import { blocks, collection, config, fields } from "cimisy/config";
+import { blocks, collection, config, fields, singleton } from "cimisy/config";
 import { githubSource } from "cimisy/adapters/github";
+import { seoSettingsFields } from "cimisy/seo";
 
 export default config({
   source: githubSource({
@@ -22,6 +23,7 @@ export default config({
         title: fields.text({ label: "Title", validation: { isRequired: true } }),
         slug: fields.slug({ source: "title" }),
         publishedAt: fields.date({ label: "Published at" }),
+        seo: fields.seo(),
         body: fields.blocks({
           label: "Body",
           blocks: {
@@ -33,6 +35,16 @@ export default config({
           },
         }),
       },
+    }),
+  },
+
+  // Site-wide settings + SEO defaults, editable at /admin/settings and fed
+  // into generateMetadata via seoDefaultsFromSettings (see cimisy/seo).
+  singletons: {
+    settings: singleton({
+      label: "Site settings",
+      path: "content/settings.yaml",
+      schema: { ...seoSettingsFields() },
     }),
   },
 

@@ -1,7 +1,9 @@
 import "server-only";
 import type { EntrySummary } from "../content/collection-store.js";
 import { listEntries, readEntry } from "../content/collection-store.js";
-import type { CimisyConfig } from "../config/define-config.js";
+import type { SingletonSnapshot } from "../content/singleton-store.js";
+import { readSingleton } from "../content/singleton-store.js";
+import type { NormalizedCollection, NormalizedSingleton, ResolvedCimisyConfig } from "../config/define-config.js";
 import { getPreviewRef } from "./draft-mode.js";
 
 export interface CollectionReader {
@@ -10,8 +12,21 @@ export interface CollectionReader {
   bySlug(slug: string): Promise<EntrySummary | null>;
 }
 
+export interface SingletonReader {
+  /** Null when the singleton has never been saved — mirror of the admin API's `{ singleton: null }` contract. */
+  get(): Promise<SingletonSnapshot | null>;
+}
+
+/** One page's children, keyed by section key: a SingletonReader for section()s, a CollectionReader for nested collection()s. */
+export type PageReader = Record<string, CollectionReader | SingletonReader>;
+
 export interface Reader {
+  /** Top-level collections only — page-nested ones live under `pages`. */
   collections: Record<string, CollectionReader>;
+  /** Top-level singletons only (e.g. site settings). */
+  singletons: Record<string, SingletonReader>;
+  /** reader.pages.home.hero.get(), reader.pages.home.testimonials.all() */
+  pages: Record<string, PageReader>;
 }
 
 /**
@@ -28,10 +43,9 @@ export interface Reader {
  * the admin API (see content/codec.ts) — a hand-edited malicious file is
  * rejected here too, not just when viewed through the admin UI.
  */
-export function createReader(cimisyConfig: CimisyConfig): Reader {
-  const collections: Record<string, CollectionReader> = {};
-  for (const [name, def] of Object.entries(cimisyConfig.collections)) {
-    collections[name] = {
+export function createReader(cimisyConfig: ResolvedCimisyConfig): Reader {
+  function collectionReader(def: NormalizedCollection): CollectionReader {
+    return {
       async all() {
         const ref = await getPreviewRef();
         return listEntries(cimisyConfig.source, def, ref ?? undefined);
@@ -42,5 +56,37 @@ export function createReader(cimisyConfig: CimisyConfig): Reader {
       },
     };
   }
-  return { collections };
+
+  function singletonReader(def: NormalizedSingleton): SingletonReader {
+    return {
+      async get() {
+        const ref = await getPreviewRef();
+        return readSingleton(cimisyConfig.source, def, ref ?? undefined);
+      },
+    };
+  }
+
+  const collections: Record<string, CollectionReader> = {};
+  const singletons: Record<string, SingletonReader> = {};
+  const pages: Record<string, PageReader> = {};
+
+  for (const node of cimisyConfig.contentTree) {
+    if (node.kind === "collection") {
+      collections[node.key] = collectionReader(cimisyConfig.collectionsByKey[node.key]!);
+    } else if (node.kind === "singleton") {
+      singletons[node.key] = singletonReader(cimisyConfig.singletonsByKey[node.key]!);
+    } else {
+      const children: PageReader = {};
+      for (const child of node.children) {
+        const sectionKey = child.key.split(".").pop()!;
+        children[sectionKey] =
+          child.kind === "collection"
+            ? collectionReader(cimisyConfig.collectionsByKey[child.key]!)
+            : singletonReader(cimisyConfig.singletonsByKey[child.key]!);
+      }
+      pages[node.key] = children;
+    }
+  }
+
+  return { collections, singletons, pages };
 }

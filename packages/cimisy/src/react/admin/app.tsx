@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import type { AdminManifest } from "../../next/manifest.js";
 import { ADMIN_THEME_CSS } from "../admin-theme.js";
 import { type MeResponse, apiUrl, logout } from "./api.js";
-import { CollectionList, EntryList } from "./collections.js";
+import { ContentTree, EntryList } from "./collections.js";
 import { DraftsPage } from "./drafts.js";
 import { EntryForm } from "./entry-form.js";
 import { TopNav } from "./nav.js";
+import { SingletonForm } from "./singleton-form.js";
 import { TeamPage } from "./team.js";
 
 export interface AdminAppProps {
@@ -107,30 +108,35 @@ function AdminRoutes({
   apiBasePath,
   role,
 }: AdminAppProps & { role?: string | null }) {
-  const [collectionName, slug] = segments;
+  // Dotted content keys ("home.hero") are a single URL segment, so the
+  // two-segment [key, slug] routing survives the hierarchy unchanged.
+  const [contentKey, slug] = segments;
 
-  if (!collectionName) {
-    return <CollectionList manifest={manifest} basePath={basePath} />;
+  if (!contentKey) {
+    return <ContentTree manifest={manifest} basePath={basePath} />;
   }
-  // Reserved before collection-name routing, the same way "new" is reserved
-  // at the slug level below — a project collection literally named "team"
-  // or "drafts" would collide with this, same accepted tradeoff as "new".
-  if (collectionName === "team") {
+  // Reserved before content-key routing, the same way "new" is reserved at
+  // the slug level below — config() rejects content keys named "team",
+  // "drafts", "pages", or "new" so these can't shadow real content.
+  if (contentKey === "team") {
     return <TeamPage basePath={basePath} apiBasePath={apiBasePath} isAdmin={role === "admin"} />;
   }
-  if (collectionName === "drafts") {
+  if (contentKey === "drafts") {
     return <DraftsPage manifest={manifest} basePath={basePath} apiBasePath={apiBasePath} />;
   }
-  const collectionDef = manifest.collections.find((c) => c.name === collectionName);
-  if (!collectionDef) {
-    return <p>Unknown collection &quot;{collectionName}&quot;</p>;
+  const entity = manifest.byKey[contentKey];
+  if (!entity) {
+    return <p>Unknown content &quot;{contentKey}&quot;</p>;
+  }
+  if (entity.kind === "singleton") {
+    return <SingletonForm singleton={entity} basePath={basePath} apiBasePath={apiBasePath} />;
   }
   if (!slug) {
-    return <EntryList collection={collectionDef} basePath={basePath} apiBasePath={apiBasePath} />;
+    return <EntryList collection={entity} basePath={basePath} apiBasePath={apiBasePath} />;
   }
   return (
     <EntryForm
-      collection={collectionDef}
+      collection={entity}
       slug={slug === "new" ? null : slug}
       basePath={basePath}
       apiBasePath={apiBasePath}

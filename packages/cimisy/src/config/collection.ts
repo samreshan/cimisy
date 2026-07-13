@@ -4,8 +4,12 @@ import type { SlugFieldDefinition } from "./fields/slug.js";
 
 export interface CollectionOptions<Schema extends Record<string, FieldDefinition>> {
   label: string;
-  /** e.g. "content/posts/*.mdx" — a single-segment glob, see shared/slug.ts. */
-  path: string;
+  /**
+   * e.g. "content/posts/*.mdx" — a single-segment glob, see shared/slug.ts.
+   * Required for top-level collections; optional inside a page(), where the
+   * normalizer derives "<pagePath>/<key>/*.mdx" from the page's directory.
+   */
+  path?: string;
   /** Name of the field (must be a fields.slug()) used to derive each entry's filename. */
   slugField: keyof Schema & string;
   schema: Schema;
@@ -22,9 +26,10 @@ export interface CollectionOptions<Schema extends Record<string, FieldDefinition
 export interface CollectionDefinition<Schema extends Record<string, FieldDefinition> = Record<string, FieldDefinition>> {
   readonly type: "collection";
   readonly label: string;
-  readonly path: string;
-  readonly directory: string;
-  readonly extension: string;
+  /** Unset only for page-nested collections that defer to the normalizer. */
+  readonly path?: string;
+  readonly directory?: string;
+  readonly extension?: string;
   readonly slugField: string;
   readonly schema: Schema;
   readonly previewPath?: string;
@@ -33,7 +38,10 @@ export interface CollectionDefinition<Schema extends Record<string, FieldDefinit
 export function collection<Schema extends Record<string, FieldDefinition>>(
   options: CollectionOptions<Schema>,
 ): CollectionDefinition<Schema> {
-  const { directory, extension } = resolveCollectionShape(options.path);
+  // When a path is given, resolve it eagerly so a top-level misconfig
+  // still fails at the definition site; pathless (page-nested) collections
+  // are resolved — and re-validated — by config() normalization instead.
+  const shape = options.path === undefined ? undefined : resolveCollectionShape(options.path);
   const slugFieldDef = options.schema[options.slugField];
   if (!slugFieldDef || slugFieldDef.kind !== "slug") {
     throw new Error(
@@ -46,8 +54,8 @@ export function collection<Schema extends Record<string, FieldDefinition>>(
     type: "collection",
     label: options.label,
     path: options.path,
-    directory,
-    extension,
+    directory: shape?.directory,
+    extension: shape?.extension,
     slugField: options.slugField,
     schema: options.schema,
     previewPath: options.previewPath,

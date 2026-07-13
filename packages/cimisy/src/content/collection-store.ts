@@ -1,4 +1,4 @@
-import type { CollectionDefinition } from "../config/collection.js";
+import type { NormalizedCollection } from "../config/define-config.js";
 import type { SlugFieldDefinition } from "../config/fields/slug.js";
 import { CimisyError } from "../shared/errors.js";
 import { assertSafeSlug, entryPathForSlug, slugify } from "../shared/slug.js";
@@ -21,7 +21,7 @@ export interface EntrySummary {
  * thrown, so the failure mode for "one bad file" is "one broken row in
  * the list," not "the whole list is unreachable."
  */
-export async function listEntries(adapter: StorageAdapter, def: CollectionDefinition, ref?: string): Promise<EntrySummary[]> {
+export async function listEntries(adapter: StorageAdapter, def: NormalizedCollection, ref?: string): Promise<EntrySummary[]> {
   const files = await adapter.list(def.directory, ref);
   const entries: EntrySummary[] = [];
   for (const file of files) {
@@ -42,14 +42,14 @@ export async function listEntries(adapter: StorageAdapter, def: CollectionDefini
   return entries;
 }
 
-function deriveSlugFromPath(path: string, def: CollectionDefinition): string {
+function deriveSlugFromPath(path: string, def: NormalizedCollection): string {
   const filename = path.slice(def.directory.length + 1);
   return filename.slice(0, filename.length - def.extension.length);
 }
 
 export async function readEntry(
   adapter: StorageAdapter,
-  def: CollectionDefinition,
+  def: NormalizedCollection,
   slug: string,
   ref?: string,
 ): Promise<EntrySummary | null> {
@@ -76,7 +76,7 @@ export async function readEntry(
  * permission checks too, so authorization is always evaluated against a
  * real, safe path — never a raw, unvalidated one.
  */
-export function resolveEntrySlug(def: CollectionDefinition, values: Record<string, unknown>, explicitSlug?: string): string {
+export function resolveEntrySlug(def: NormalizedCollection, values: Record<string, unknown>, explicitSlug?: string): string {
   const slug = explicitSlug ?? (values[def.slugField] as string | undefined);
   if (slug) {
     assertSafeSlug(slug);
@@ -102,7 +102,7 @@ export interface WriteEntryInput {
 
 export async function writeEntry(
   adapter: StorageAdapter,
-  def: CollectionDefinition,
+  def: NormalizedCollection,
   input: WriteEntryInput,
 ): Promise<{ result: ChangeResult; slug: string }> {
   const slug = resolveEntrySlug(def, input.values, input.slug);
@@ -128,7 +128,7 @@ export interface DeleteEntryInput {
 
 export async function deleteEntry(
   adapter: StorageAdapter,
-  def: CollectionDefinition,
+  def: NormalizedCollection,
   slug: string,
   input: DeleteEntryInput,
 ): Promise<ChangeResult> {

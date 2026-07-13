@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { z } from "zod";
-import type { CimisyConfig } from "../config/define-config.js";
+import type { ResolvedCimisyConfig } from "../config/define-config.js";
 import { deleteEntry, listEntries, readEntry, resolveEntrySlug, writeEntry } from "../content/collection-store.js";
 import { ensureDraftBranchAndPr } from "../content/draft-workflow.js";
+import { readSingleton, writeSingleton } from "../content/singleton-store.js";
 import {
   assertConfiguredDirectory,
   assertPathUnderConfiguredDirectory,
@@ -14,7 +15,7 @@ import {
 } from "../content/media.js";
 import { resolveRole } from "../rbac/resolve-role.js";
 import { readUserRoster, writeUserRoster } from "../rbac/user-store.js";
-import { draftBranchName, parseDraftBranchName } from "../shared/branch-name.js";
+import { assertSafeContentKey, draftBranchName, parseDraftBranchName, SINGLETON_DRAFT_SLUG } from "../shared/branch-name.js";
 import { CimisyError, ConflictError, ForbiddenError, NotFoundError, RateLimitedError, ValidationError } from "../shared/errors.js";
 import { isGithubSource } from "../shared/github-source-shape.js";
 import { assertSafeRepoPath, assertSafeSlug, entryPathForSlug } from "../shared/slug.js";
@@ -23,7 +24,13 @@ import { DEFAULT_REF, resolveActor } from "./actor.js";
 import { handleCallback, handleLogin, handleLogout } from "./auth-routes.js";
 import { requireSameOrigin } from "./csrf.js";
 import { handlePreviewDisable, handlePreviewEnable } from "./draft-mode.js";
-import { deleteEntryBodySchema, setUserRoleBodySchema, uploadMediaBodySchema, writeEntryBodySchema } from "./request-schemas.js";
+import {
+  deleteEntryBodySchema,
+  setUserRoleBodySchema,
+  uploadMediaBodySchema,
+  writeEntryBodySchema,
+  writeSingletonBodySchema,
+} from "./request-schemas.js";
 import { SESSION_COOKIE_NAME, verifySessionToken } from "./session.js";
 
 /** Not a real content path — RBAC's path-glob matching treats any string the same way, and a "**" rule already matches this, so no changes needed to rbac/glob.ts. */
@@ -56,19 +63,39 @@ function errorResponse(err: unknown): NextResponse {
  * that isn't the dedicated /history route below) instead of silently
  * ignoring them.
  */
-function parseRoute(routeParams: string[]): { collectionName: string; slug: string | null } | null {
+function parseRoute(routeParams: string[]): { contentKey: string; slug: string | null } | null {
   if (routeParams[0] !== "collections" || !routeParams[1]) return null;
   if (routeParams.length > 3) return null;
+  assertSafeContentKey(routeParams[1]);
   const slug = routeParams[2] ?? null;
   if (slug !== null) assertSafeSlug(slug);
-  return { collectionName: routeParams[1], slug };
+  return { contentKey: routeParams[1], slug };
 }
 
-function parseHistoryRoute(routeParams: string[]): { collectionName: string; slug: string } | null {
+function parseHistoryRoute(routeParams: string[]): { contentKey: string; slug: string } | null {
   if (routeParams[0] !== "collections" || !routeParams[1] || !routeParams[2] || routeParams[3] !== "history") return null;
   if (routeParams.length !== 4) return null;
+  assertSafeContentKey(routeParams[1]);
   assertSafeSlug(routeParams[2]);
-  return { collectionName: routeParams[1], slug: routeParams[2] };
+  return { contentKey: routeParams[1], slug: routeParams[2] };
+}
+
+/**
+ * `/singletons/<key>` (read/write) and `/singletons/<key>/history` — a
+ * singleton has no slug, so the route grammar stops at the key. Returns
+ * null (→ 404) on a malformed key rather than throwing: unlike parseRoute
+ * this runs in the dispatch table, outside any handler's try/catch.
+ */
+function parseSingletonRoute(routeParams: string[]): { contentKey: string; history: boolean } | null {
+  if (routeParams[0] !== "singletons" || !routeParams[1]) return null;
+  const history = routeParams.length === 3 && routeParams[2] === "history";
+  if (routeParams.length !== 2 && !history) return null;
+  try {
+    assertSafeContentKey(routeParams[1]);
+  } catch {
+    return null;
+  }
+  return { contentKey: routeParams[1], history };
 }
 
 function parseDraftMergeRoute(routeParams: string[]): { id: string } | null {
@@ -108,7 +135,7 @@ function resolveSafeRef(refParam: string | null): string {
 }
 
 /** Keyed by identity (not IP): the abuse case here is a compromised/buggy authenticated client hammering writes, not anonymous traffic — IP-keying would be trivially bypassed by anyone who can already authenticate. */
-async function enforceWriteRateLimit(cimisyConfig: CimisyConfig, actor: Actor): Promise<void> {
+async function enforceWriteRateLimit(cimisyConfig: ResolvedCimisyConfig, actor: Actor): Promise<void> {
   const limiter = cimisyConfig.rateLimiter;
   if (!limiter) return;
   const result = await limiter.consume(`write:${actor.author.id}`);
@@ -117,7 +144,7 @@ async function enforceWriteRateLimit(cimisyConfig: CimisyConfig, actor: Actor): 
   }
 }
 
-export function createCimisyHandler(cimisyConfig: CimisyConfig) {
+export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
   async function handleAuth(request: NextRequest, action: string | undefined): Promise<NextResponse | null> {
     if (action === "me") {
       // Deliberately does its own session-verify + resolveRole instead of
@@ -172,8 +199,8 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       if (!parsed) return NextResponse.json({ error: "Not found" }, { status: 404 });
       const actor = await resolveActor(request, cimisyConfig);
       if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      const def = cimisyConfig.collections[parsed.collectionName];
-      if (!def) return NextResponse.json({ error: `Unknown collection "${parsed.collectionName}"` }, { status: 404 });
+      const def = cimisyConfig.collectionsByKey[parsed.contentKey];
+      if (!def) return NextResponse.json({ error: `Unknown collection "${parsed.contentKey}"` }, { status: 404 });
 
       if (parsed.slug === null) {
         actor.requirePermission("read", def.directory);
@@ -196,8 +223,8 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       if (!parsed) return NextResponse.json({ error: "Not found" }, { status: 404 });
       const actor = await resolveActor(request, cimisyConfig);
       if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      const def = cimisyConfig.collections[parsed.collectionName];
-      if (!def) return NextResponse.json({ error: `Unknown collection "${parsed.collectionName}"` }, { status: 404 });
+      const def = cimisyConfig.collectionsByKey[parsed.contentKey];
+      if (!def) return NextResponse.json({ error: `Unknown collection "${parsed.contentKey}"` }, { status: 404 });
       actor.requirePermission("read", `${def.directory}/${parsed.slug}${def.extension}`);
 
       if (!cimisyConfig.source.capabilities.history || !cimisyConfig.source.getHistory) {
@@ -205,6 +232,74 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       }
       const path = entryPathForSlug(def.path, parsed.slug);
       const history = await cimisyConfig.source.getHistory(path);
+      return NextResponse.json({ supported: true, history });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  /**
+   * Reads a singleton. A declared-but-never-saved singleton responds
+   * `{ singleton: null }` rather than 404 on purpose: the singleton
+   * exists (it's in config), it just has no file yet — the admin renders
+   * an empty create form from this, and the reader's get() mirrors the
+   * same null contract.
+   */
+  async function handleSingletonGet(request: NextRequest, contentKey: string): Promise<NextResponse> {
+    try {
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      const def = cimisyConfig.singletonsByKey[contentKey];
+      if (!def) return NextResponse.json({ error: `Unknown singleton "${contentKey}"` }, { status: 404 });
+      actor.requirePermission("read", def.path);
+      const singleton = await readSingleton(cimisyConfig.source, def);
+      return NextResponse.json({ singleton });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  async function handleSingletonPut(request: NextRequest, contentKey: string): Promise<NextResponse> {
+    try {
+      requireSameOrigin(request);
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      await enforceWriteRateLimit(cimisyConfig, actor);
+      const def = cimisyConfig.singletonsByKey[contentKey];
+      if (!def) return NextResponse.json({ error: `Unknown singleton "${contentKey}"` }, { status: 404 });
+
+      const body = await parseJsonBody(request, writeSingletonBodySchema);
+      actor.requirePermission("write", def.path);
+
+      const { ref, publish } = await resolveWriteRef(actor, contentKey, SINGLETON_DRAFT_SLUG);
+      const result = await writeSingleton(cimisyConfig.source, def, {
+        values: body.values,
+        baseVersion: body.baseVersion ?? null,
+        author: actor.author,
+        message: `Update ${contentKey}`,
+        ref,
+      });
+      if (result.conflict) {
+        return NextResponse.json({ error: "Version conflict", conflict: result.conflict }, { status: 409 });
+      }
+      return NextResponse.json({ version: result.version, publish });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  async function handleSingletonHistory(request: NextRequest, contentKey: string): Promise<NextResponse> {
+    try {
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      const def = cimisyConfig.singletonsByKey[contentKey];
+      if (!def) return NextResponse.json({ error: `Unknown singleton "${contentKey}"` }, { status: 404 });
+      actor.requirePermission("read", def.path);
+
+      if (!cimisyConfig.source.capabilities.history || !cimisyConfig.source.getHistory) {
+        return NextResponse.json({ supported: false, history: [] });
+      }
+      const history = await cimisyConfig.source.getHistory(def.path);
       return NextResponse.json({ supported: true, history });
     } catch (err) {
       return errorResponse(err);
@@ -221,16 +316,16 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
    */
   async function resolveWriteRef(
     actor: Actor,
-    collectionName: string,
+    contentKey: string,
     slug: string,
   ): Promise<{ ref: string; publish: { status: "direct" } | { status: "draft"; branch: string; pullRequestUrl: string } }> {
     if (actor.directPublish) return { ref: DEFAULT_REF, publish: { status: "direct" } };
-    const branch = draftBranchName(actor.login, collectionName, slug);
+    const branch = draftBranchName(actor.login, contentKey, slug);
     const draft = await ensureDraftBranchAndPr(
       cimisyConfig.source,
       branch,
       DEFAULT_REF,
-      `cimisy: ${collectionName}/${slug}`,
+      `cimisy: ${contentKey}/${slug}`,
     );
     return { ref: branch, publish: { status: "draft", ...draft } };
   }
@@ -243,21 +338,21 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       const actor = await resolveActor(request, cimisyConfig);
       if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       await enforceWriteRateLimit(cimisyConfig, actor);
-      const def = cimisyConfig.collections[parsed.collectionName];
-      if (!def) return NextResponse.json({ error: `Unknown collection "${parsed.collectionName}"` }, { status: 404 });
+      const def = cimisyConfig.collectionsByKey[parsed.contentKey];
+      if (!def) return NextResponse.json({ error: `Unknown collection "${parsed.contentKey}"` }, { status: 404 });
 
       const body = await parseJsonBody(request, writeEntryBodySchema);
       const slug = resolveEntrySlug(def, body.values, parsed.slug ?? undefined);
       actor.requirePermission("write", `${def.directory}/${slug}${def.extension}`);
 
-      const { ref, publish } = await resolveWriteRef(actor, parsed.collectionName, slug);
+      const { ref, publish } = await resolveWriteRef(actor, parsed.contentKey, slug);
 
       const { result, slug: writtenSlug } = await writeEntry(cimisyConfig.source, def, {
         slug,
         values: body.values,
         baseVersion: body.baseVersion ?? null,
         author: actor.author,
-        message: parsed.slug ? `Update ${parsed.collectionName}/${slug}` : `Create ${parsed.collectionName}/${slug}`,
+        message: parsed.slug ? `Update ${parsed.contentKey}/${slug}` : `Create ${parsed.contentKey}/${slug}`,
         ref,
       });
       if (result.conflict) {
@@ -277,17 +372,17 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       const actor = await resolveActor(request, cimisyConfig);
       if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       await enforceWriteRateLimit(cimisyConfig, actor);
-      const def = cimisyConfig.collections[parsed.collectionName];
-      if (!def) return NextResponse.json({ error: `Unknown collection "${parsed.collectionName}"` }, { status: 404 });
+      const def = cimisyConfig.collectionsByKey[parsed.contentKey];
+      if (!def) return NextResponse.json({ error: `Unknown collection "${parsed.contentKey}"` }, { status: 404 });
 
       actor.requirePermission("write", `${def.directory}/${parsed.slug}${def.extension}`);
-      const { ref, publish } = await resolveWriteRef(actor, parsed.collectionName, parsed.slug);
+      const { ref, publish } = await resolveWriteRef(actor, parsed.contentKey, parsed.slug);
 
       const body = await parseJsonBody(request, deleteEntryBodySchema).catch(() => ({ baseVersion: null }));
       const result = await deleteEntry(cimisyConfig.source, def, parsed.slug, {
         baseVersion: body.baseVersion ?? null,
         author: actor.author,
-        message: `Delete ${parsed.collectionName}/${parsed.slug}`,
+        message: `Delete ${parsed.contentKey}/${parsed.slug}`,
         ref,
       });
       if (result.conflict) {
@@ -363,6 +458,24 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
   }
 
   /**
+   * Resolves what a draft branch's content key + slug actually point at —
+   * a collection entry, or a singleton (whose drafts always carry the
+   * reserved SINGLETON_DRAFT_SLUG). Keys are unique across collections ∪
+   * singletons (config() enforces it), so the lookup order can't be
+   * ambiguous. Returns the repo path RBAC decisions are made against.
+   */
+  function resolveDraftTarget(
+    contentKey: string,
+    slug: string,
+  ): { kind: "collection" | "singleton"; path: string } | null {
+    const collectionDef = cimisyConfig.collectionsByKey[contentKey];
+    if (collectionDef) return { kind: "collection", path: `${collectionDef.directory}/${slug}${collectionDef.extension}` };
+    const singletonDef = cimisyConfig.singletonsByKey[contentKey];
+    if (singletonDef && slug === SINGLETON_DRAFT_SLUG) return { kind: "singleton", path: singletonDef.path };
+    return null;
+  }
+
+  /**
    * Lists open drafts (branches under `cimisy/`) the caller is allowed to
    * see: their own drafts (they wrote them), plus anyone's draft they have
    * `publish` permission to review. Per-PR failures (an unparseable branch
@@ -383,12 +496,11 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       for (const summary of summaries) {
         const parsed = parseDraftBranchName(summary.sourceRef);
         if (!parsed) continue;
-        const def = cimisyConfig.collections[parsed.collectionName];
-        if (!def) continue;
-        const entryPath = `${def.directory}/${parsed.slug}${def.extension}`;
+        const target = resolveDraftTarget(parsed.contentKey, parsed.slug);
+        if (!target) continue;
         let canMerge = false;
         try {
-          actor.requirePermission("publish", entryPath);
+          actor.requirePermission("publish", target.path);
           canMerge = true;
         } catch {
           // not a reviewer for this entry — fine, might still be their own draft
@@ -402,7 +514,8 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
           state: summary.state,
           updatedAt: summary.updatedAt,
           author: summary.author,
-          collectionName: parsed.collectionName,
+          kind: target.kind,
+          contentKey: parsed.contentKey,
           slug: parsed.slug,
           branch: summary.sourceRef,
           canMerge,
@@ -447,10 +560,9 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       if (!target) return NextResponse.json({ error: "Not found" }, { status: 404 });
       const parsed = parseDraftBranchName(target.sourceRef);
       if (!parsed) return NextResponse.json({ error: "Not found" }, { status: 404 });
-      const def = cimisyConfig.collections[parsed.collectionName];
-      if (!def) return NextResponse.json({ error: "Not found" }, { status: 404 });
-      const entryPath = `${def.directory}/${parsed.slug}${def.extension}`;
-      actor.requirePermission("publish", entryPath);
+      const draftTarget = resolveDraftTarget(parsed.contentKey, parsed.slug);
+      if (!draftTarget) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      actor.requirePermission("publish", draftTarget.path);
 
       try {
         await cimisyConfig.source.mergeChangeRequest(id);
@@ -489,7 +601,7 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       const path = buildMediaPath(body.directory, body.filename, type.extension);
       actor.requirePermission("write", path);
 
-      const { ref, publish } = await resolveWriteRef(actor, body.collectionName, body.slug);
+      const { ref, publish } = await resolveWriteRef(actor, body.targetKey, body.slug);
 
       const result = await cimisyConfig.source.commitChange({
         ref,
@@ -590,6 +702,13 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
       if (route[0] === "drafts") return handleDraftsList(request);
       if (route[0] === "media" && route[1] === "raw") return handleMediaRaw(request);
       if (route[0] === "media") return handleMediaList(request);
+      if (route[0] === "singletons") {
+        const parsed = parseSingletonRoute(route);
+        if (!parsed) return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return parsed.history
+          ? handleSingletonHistory(request, parsed.contentKey)
+          : handleSingletonGet(request, parsed.contentKey);
+      }
       if (route[3] === "history") return handleHistory(request, { route });
       return handleGet(request, { route });
     },
@@ -606,9 +725,22 @@ export function createCimisyHandler(cimisyConfig: CimisyConfig) {
         return handleDraftMerge(request, parsed.id);
       }
       if (route[0] === "media") return handleMediaUpload(request);
+      if (route[0] === "singletons") {
+        const parsed = parseSingletonRoute(route);
+        if (!parsed || parsed.history) return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return handleSingletonPut(request, parsed.contentKey);
+      }
       return handlePost(request, { route });
     },
-    PUT: async (request: NextRequest, context: { params: RouteParams }) => handlePost(request, await context.params),
+    PUT: async (request: NextRequest, context: { params: RouteParams }) => {
+      const params = await context.params;
+      if (params.route[0] === "singletons") {
+        const parsed = parseSingletonRoute(params.route);
+        if (!parsed || parsed.history) return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return handleSingletonPut(request, parsed.contentKey);
+      }
+      return handlePost(request, params);
+    },
     DELETE: async (request: NextRequest, context: { params: RouteParams }) =>
       handleDelete(request, await context.params),
   };

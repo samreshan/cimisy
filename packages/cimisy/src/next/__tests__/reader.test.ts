@@ -2,8 +2,8 @@ import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeGithubApi, type FakeGithubApi } from "../../adapters/github/__tests__/fake-github-api.js";
 import { githubSource } from "../../adapters/github/adapter.js";
-import { collection, config, fields } from "../../config/index.js";
-import type { CimisyConfig } from "../../config/define-config.js";
+import { collection, config, fields, page, section, singleton } from "../../config/index.js";
+import type { ResolvedCimisyConfig } from "../../config/define-config.js";
 
 const cookiesMock = vi.fn();
 const draftModeMock = vi.fn();
@@ -20,7 +20,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
   publicKeyEncoding: { type: "pkcs1", format: "pem" },
 });
 
-function buildConfig(fake: FakeGithubApi): CimisyConfig {
+function buildConfig(fake: FakeGithubApi): ResolvedCimisyConfig {
   return config({
     source: githubSource({
       repo: `${fake.owner}/${fake.repo}`,
@@ -108,5 +108,87 @@ describe("createReader — draft-mode-aware reads", () => {
     const reader = createReader(buildConfig(fake));
     const entries = await reader.collections.posts?.all();
     expect(entries?.map((e) => e.slug)).toEqual(["hello"]);
+  });
+});
+
+describe("createReader — singletons and pages", () => {
+  let fake: FakeGithubApi;
+
+  function buildHierarchicalConfig(): ResolvedCimisyConfig {
+    return config({
+      source: githubSource({
+        repo: `${fake.owner}/${fake.repo}`,
+        branch: "main",
+        appId: "1",
+        privateKey,
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        sessionSecret: "session-secret",
+      }),
+      singletons: {
+        settings: singleton({
+          label: "Site settings",
+          path: "content/settings.yaml",
+          schema: { siteName: fields.text({ label: "Site name" }) },
+        }),
+      },
+      pages: {
+        home: page({
+          label: "Home",
+          route: "/",
+          sections: {
+            hero: section({ label: "Hero", schema: { heading: fields.text({ label: "Heading" }) } }),
+            testimonials: collection({
+              label: "Testimonials",
+              slugField: "slug",
+              schema: { quote: fields.text({ label: "Quote" }), slug: fields.slug({ source: "quote" }) },
+            }),
+          },
+        }),
+      },
+    });
+  }
+
+  beforeEach(() => {
+    fake = createFakeGithubApi({
+      owner: "acme",
+      repo: "site",
+      initialFiles: {
+        "content/settings.yaml": "siteName: Acme\n",
+        "content/pages/home/hero.yaml": "heading: Welcome\n",
+        "content/pages/home/testimonials/great.mdx": "---\nquote: Great\nslug: great\n---\n",
+      },
+    });
+    fake.install();
+    draftModeMock.mockReturnValue({ isEnabled: false });
+  });
+
+  afterEach(() => {
+    fake.restore();
+    vi.clearAllMocks();
+  });
+
+  it("reader.singletons.<key>.get() reads a top-level singleton", async () => {
+    const reader = createReader(buildHierarchicalConfig());
+    const snapshot = await reader.singletons.settings?.get();
+    expect(snapshot?.values).toEqual({ siteName: "Acme" });
+    expect(snapshot?.version).toBeTruthy();
+  });
+
+  it("get() returns null (not a throw) for a never-saved singleton", async () => {
+    fake.restore();
+    fake = createFakeGithubApi({ owner: "acme", repo: "site", initialFiles: {} });
+    fake.install();
+    const reader = createReader(buildHierarchicalConfig());
+    expect(await reader.singletons.settings?.get()).toBeNull();
+  });
+
+  it("reader.pages.<page>.<section> exposes section singletons and nested collections by their short key", async () => {
+    const reader = createReader(buildHierarchicalConfig());
+    const hero = reader.pages.home?.hero as { get(): Promise<{ values: Record<string, unknown> } | null> };
+    expect((await hero.get())?.values).toEqual({ heading: "Welcome" });
+
+    const testimonials = reader.pages.home?.testimonials as { all(): Promise<Array<{ slug: string }>> };
+    expect((await testimonials.all()).map((e) => e.slug)).toEqual(["great"]);
   });
 });

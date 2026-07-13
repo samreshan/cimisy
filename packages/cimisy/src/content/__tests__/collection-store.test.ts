@@ -3,22 +3,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collection } from "../../config/collection.js";
+import { config } from "../../config/define-config.js";
 import { blocks, fields } from "../../config/fields/index.js";
 import { LocalStorageAdapter } from "../../storage/local.js";
 import { listEntries, writeEntry } from "../collection-store.js";
 
 const AUTHOR = { id: "1", name: "Test", email: "test@example.com" };
 
-const postsDef = collection({
-  label: "Posts",
-  path: "posts/*.mdx",
-  slugField: "slug",
-  schema: {
-    title: fields.text({ label: "Title" }),
-    slug: fields.slug({ source: "title" }),
-    body: fields.blocks({ label: "Body", blocks: { paragraph: blocks.paragraph() } }),
+// The store consumes the normalized shape config() produces, so tests go
+// through the same normalization pass real configs do.
+const postsDef = config({
+  source: new LocalStorageAdapter({ rootDir: "/tmp/unused", allowInProduction: true }),
+  collections: {
+    posts: collection({
+      label: "Posts",
+      path: "posts/*.mdx",
+      slugField: "slug",
+      schema: {
+        title: fields.text({ label: "Title" }),
+        slug: fields.slug({ source: "title" }),
+        body: fields.blocks({ label: "Body", blocks: { paragraph: blocks.paragraph() } }),
+      },
+    }),
   },
-});
+}).collectionsByKey["posts"]!;
 
 describe("listEntries — per-file error isolation", () => {
   let rootDir: string;

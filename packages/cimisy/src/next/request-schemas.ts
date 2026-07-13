@@ -14,6 +14,12 @@ export const writeEntryBodySchema = z.object({
   baseVersion: z.string().nullable().optional(),
 });
 
+/** Same shape as an entry write (a singleton just has no slug) — kept as its own schema so the two contracts can drift independently. */
+export const writeSingletonBodySchema = z.object({
+  values: z.record(z.string(), z.unknown()),
+  baseVersion: z.string().nullable().optional(),
+});
+
 export const deleteEntryBodySchema = z.object({
   baseVersion: z.string().nullable().optional(),
 });
@@ -28,12 +34,14 @@ export const setUserRoleBodySchema = z.object({
  * `content` is validated only as "a non-empty string that looks like
  * base64" here — the real content/format/size checks (magic-byte sniff,
  * 5MB cap) happen in content/media.ts's decodeUploadedImage, since those
- * need the decoded bytes, not just the string shape. `slug` identifies
- * which entry's draft branch (or main, for direct-publish roles) the
- * upload should land on — see next/route-handler.ts's resolveWriteRef.
+ * need the decoded bytes, not just the string shape. `targetKey` (a
+ * collection or singleton content key) + `slug` identify which draft
+ * branch (or main, for direct-publish roles) the upload should land on —
+ * see next/route-handler.ts's resolveWriteRef; singleton editors send
+ * the reserved slug "singleton".
  */
 export const uploadMediaBodySchema = z.object({
-  collectionName: z.string().min(1),
+  targetKey: z.string().min(1),
   slug: z.string().min(1),
   directory: z.string().min(1),
   filename: z.string().min(1).max(255),
@@ -44,6 +52,7 @@ export const uploadMediaBodySchema = z.object({
 });
 
 export type WriteEntryBody = z.infer<typeof writeEntryBodySchema>;
+export type WriteSingletonBody = z.infer<typeof writeSingletonBodySchema>;
 export type DeleteEntryBody = z.infer<typeof deleteEntryBodySchema>;
 export type SetUserRoleBody = z.infer<typeof setUserRoleBodySchema>;
 export type UploadMediaBody = z.infer<typeof uploadMediaBodySchema>;

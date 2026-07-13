@@ -7,11 +7,61 @@ import { type EntrySummaryLike, type PublishResult, apiUrl } from "./api.js";
 import { TiptapBlockEditor } from "./editor/block-editor.js";
 import { HistoryPanel } from "./history.js";
 import { ImageField } from "./image-field.js";
+import { SeoPanel } from "./seo-panel.js";
 
-export function buildPreviewUrl(apiBasePath: string, collectionName: string, slug: string, previewPath: string, ref?: string): string {
+export function buildPreviewUrl(apiBasePath: string, contentKey: string, slug: string, previewPath: string, ref?: string): string {
   const redirectTo = previewPath.replace(":slug", encodeURIComponent(slug));
-  const params = new URLSearchParams({ collection: collectionName, slug, redirectTo, ...(ref ? { ref } : {}) });
+  const params = new URLSearchParams({ collection: contentKey, slug, redirectTo, ...(ref ? { ref } : {}) });
   return `${apiBasePath}/preview/enable?${params.toString()}`;
+}
+
+/** Singleton counterpart of buildPreviewUrl: no slug (the previewPath is a fixed route), `singleton=<key>` instead of `collection+slug`. */
+export function buildSingletonPreviewUrl(apiBasePath: string, contentKey: string, previewPath: string, ref?: string): string {
+  const params = new URLSearchParams({ singleton: contentKey, redirectTo: previewPath, ...(ref ? { ref } : {}) });
+  return `${apiBasePath}/preview/enable?${params.toString()}`;
+}
+
+/**
+ * The field-rendering core shared by EntryForm (collection entries) and
+ * SingletonForm (singletons/sections) — everything from `values` down to
+ * the per-kind inputs, with no knowledge of where the values get saved.
+ * `targetKey` + `slug` identify the draft branch uploads should land on
+ * (see route-handler.ts's resolveWriteRef); singleton editors pass the
+ * reserved slug "singleton".
+ */
+export function FieldsEditor({
+  fields,
+  values,
+  onChange,
+  apiBasePath,
+  targetKey,
+  slug,
+  draftRef,
+}: {
+  fields: FieldManifest[];
+  values: Record<string, unknown>;
+  onChange: (fieldName: string, value: unknown) => void;
+  apiBasePath: string;
+  targetKey: string;
+  slug: string | null;
+  draftRef?: string;
+}) {
+  return (
+    <>
+      {fields.map((field) => (
+        <FieldInput
+          key={field.name}
+          field={field}
+          value={values[field.name]}
+          onChange={(v) => onChange(field.name, v)}
+          apiBasePath={apiBasePath}
+          targetKey={targetKey}
+          slug={slug}
+          draftRef={draftRef}
+        />
+      ))}
+    </>
+  );
 }
 
 export function EntryForm({
@@ -47,19 +97,19 @@ export function EntryForm({
 
   useEffect(() => {
     if (!slug) return;
-    fetch(apiUrl(apiBasePath, `/collections/${collection.name}/${slug}`))
+    fetch(apiUrl(apiBasePath, `/collections/${collection.key}/${slug}`))
       .then((res) => res.json())
       .then((data: { entry: EntrySummaryLike }) => {
         setValues(data.entry.values);
         setVersion(data.entry.version);
         setLoading(false);
       });
-  }, [collection.name, slug, apiBasePath]);
+  }, [collection.key, slug, apiBasePath]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    const res = await fetch(apiUrl(apiBasePath, `/collections/${collection.name}${slug ? `/${slug}` : ""}`), {
+    const res = await fetch(apiUrl(apiBasePath, `/collections/${collection.key}${slug ? `/${slug}` : ""}`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ values, baseVersion: version }),
@@ -74,7 +124,7 @@ export function EntryForm({
     if (data.publish?.status === "draft") setDraftRef(data.publish.branch);
     setDirty(false);
     setPreviewKey((k) => k + 1);
-    router.push(`${basePath}/${collection.name}/${data.slug}`);
+    router.push(`${basePath}/${collection.key}/${data.slug}`);
     router.refresh();
   }
 
@@ -86,7 +136,7 @@ export function EntryForm({
     <div className="cimisy-entry-layout">
       <div className="cimisy-entry-main">
         <form onSubmit={handleSubmit}>
-          <a className="cimisy-crumb cimisy-link" href={`${basePath}/${collection.name}`}>
+          <a className="cimisy-crumb cimisy-link" href={`${basePath}/${collection.key}`}>
             &larr; {collection.label}
           </a>
           <h1 className="cimisy-heading">{slug ?? "New entry"}</h1>
@@ -112,26 +162,25 @@ export function EntryForm({
               </a>
             </p>
           )}
-          {collection.fields.map((field) => (
-            <FieldInput
-              key={field.name}
-              field={field}
-              value={values[field.name]}
-              onChange={(v) => {
-                setValues((prev) => ({ ...prev, [field.name]: v }));
-                setDirty(true);
-              }}
-              apiBasePath={apiBasePath}
-              collectionName={collection.name}
-              slug={slug}
-              draftRef={draftRef}
-            />
-          ))}
+          <FieldsEditor
+            fields={collection.fields}
+            values={values}
+            onChange={(fieldName, v) => {
+              setValues((prev) => ({ ...prev, [fieldName]: v }));
+              setDirty(true);
+            }}
+            apiBasePath={apiBasePath}
+            targetKey={collection.key}
+            slug={slug}
+            draftRef={draftRef}
+          />
           <button type="submit" className="cimisy-btn cimisy-btn-primary">
             Save
           </button>
         </form>
-        {slug && <HistoryPanel collection={collection} slug={slug} apiBasePath={apiBasePath} />}
+        {slug && (
+          <HistoryPanel historyPath={`/collections/${collection.key}/${slug}/history`} apiBasePath={apiBasePath} />
+        )}
       </div>
       {canPreview && previewOpen && slug && collection.previewPath && (
         <div className="cimisy-entry-preview">
@@ -149,7 +198,7 @@ export function EntryForm({
             key={previewKey}
             className="cimisy-preview-iframe"
             title="Preview"
-            src={buildPreviewUrl(apiBasePath, collection.name, slug, collection.previewPath)}
+            src={buildPreviewUrl(apiBasePath, collection.key, slug, collection.previewPath)}
           />
         </div>
       )}
@@ -162,7 +211,7 @@ function FieldInput({
   value,
   onChange,
   apiBasePath,
-  collectionName,
+  targetKey,
   slug,
   draftRef,
 }: {
@@ -170,7 +219,7 @@ function FieldInput({
   value: unknown;
   onChange: (value: unknown) => void;
   apiBasePath: string;
-  collectionName: string;
+  targetKey: string;
   slug: string | null;
   draftRef?: string;
 }) {
@@ -182,7 +231,7 @@ function FieldInput({
     // live document.
     return (
       <TiptapBlockEditor
-        key={`${collectionName}:${slug ?? "new"}`}
+        key={`${targetKey}:${slug ?? "new"}`}
         field={field}
         value={value}
         onChange={onChange}
@@ -198,7 +247,20 @@ function FieldInput({
         value={value}
         onChange={onChange}
         apiBasePath={apiBasePath}
-        collectionName={collectionName}
+        targetKey={targetKey}
+        slug={slug}
+        draftRef={draftRef}
+      />
+    );
+  }
+  if (field.kind === "seo") {
+    return (
+      <SeoPanel
+        field={field}
+        value={value}
+        onChange={onChange}
+        apiBasePath={apiBasePath}
+        targetKey={targetKey}
         slug={slug}
         draftRef={draftRef}
       />

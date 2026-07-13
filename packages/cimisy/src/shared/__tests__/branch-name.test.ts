@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { draftBranchName, parseDraftBranchName } from "../branch-name.js";
+import {
+  assertSafeContentKey,
+  draftBranchName,
+  parseDraftBranchName,
+  SINGLETON_DRAFT_SLUG,
+} from "../branch-name.js";
 import { UnsafePathError } from "../errors.js";
 
 describe("draftBranchName", () => {
@@ -42,8 +47,30 @@ describe("draftBranchName", () => {
     expect(() => draftBranchName(bad, "posts", "slug")).toThrow(UnsafePathError);
   });
 
-  it.each(unsafeEverywhere)("rejects an unsafe collection name: %j", (bad) => {
+  it.each(unsafeEverywhere)("rejects an unsafe content key: %j", (bad) => {
     expect(() => draftBranchName("alice", bad, "slug")).toThrow(UnsafePathError);
+  });
+
+  it("accepts dotted content keys (page-nested content) and the singleton draft slug", () => {
+    expect(draftBranchName("alice", "home.testimonials", "quote-one")).toBe(
+      "cimisy/alice/home.testimonials/quote-one",
+    );
+    expect(draftBranchName("alice", "settings", SINGLETON_DRAFT_SLUG)).toBe("cimisy/alice/settings/singleton");
+  });
+
+  it.each([
+    ".leading-dot",
+    "trailing-dot.",
+    "a..b", // empty segment
+    "home.lock", // git rejects refs whose components end in .lock
+    ".",
+    "a." + "b".repeat(120), // over the content-key length cap
+  ])("rejects a malformed dotted content key: %j", (bad) => {
+    expect(() => draftBranchName("alice", bad, "slug")).toThrow(UnsafePathError);
+  });
+
+  it("still accepts a single-segment key named exactly 'lock' (only a *.lock suffix is unsafe)", () => {
+    expect(() => draftBranchName("alice", "lock", "slug")).not.toThrow();
   });
 
   it.each(unsafeEverywhere)("rejects an unsafe slug: %j", (bad) => {
@@ -55,15 +82,55 @@ describe("draftBranchName", () => {
   });
 });
 
+describe("assertSafeContentKey", () => {
+  it("accepts top-level and dotted keys", () => {
+    expect(() => assertSafeContentKey("posts")).not.toThrow();
+    expect(() => assertSafeContentKey("home.hero")).not.toThrow();
+    expect(() => assertSafeContentKey("home.hero-banner")).not.toThrow();
+  });
+
+  it("stays a superset of the v2 collection-name grammar (mixed case parses, for old branches)", () => {
+    expect(() => assertSafeContentKey("blogPosts")).not.toThrow();
+  });
+
+  it.each(["", "..", "a..b", ".a", "a.", "home.lock", "a/b", "a\\b", "a\0b", "with space"])(
+    "rejects: %j",
+    (bad) => {
+      expect(() => assertSafeContentKey(bad)).toThrow(UnsafePathError);
+    },
+  );
+});
+
 describe("parseDraftBranchName", () => {
   it("is the exact inverse of draftBranchName for well-formed branches", () => {
     const branch = draftBranchName("alice", "posts", "hello-world");
-    expect(parseDraftBranchName(branch)).toEqual({ username: "alice", collectionName: "posts", slug: "hello-world" });
+    expect(parseDraftBranchName(branch)).toEqual({ username: "alice", contentKey: "posts", slug: "hello-world" });
+  });
+
+  it("round-trips dotted content keys and singleton drafts", () => {
+    expect(parseDraftBranchName("cimisy/alice/home.testimonials/quote-one")).toEqual({
+      username: "alice",
+      contentKey: "home.testimonials",
+      slug: "quote-one",
+    });
+    expect(parseDraftBranchName("cimisy/alice/settings/singleton")).toEqual({
+      username: "alice",
+      contentKey: "settings",
+      slug: SINGLETON_DRAFT_SLUG,
+    });
+  });
+
+  it("still parses a pre-v3 (flat collection) branch", () => {
+    expect(parseDraftBranchName("cimisy/JohnDoe/posts/hello-world")).toEqual({
+      username: "JohnDoe",
+      contentKey: "posts",
+      slug: "hello-world",
+    });
   });
 
   it("preserves a mixed-case username", () => {
     const branch = draftBranchName("JohnDoe", "posts", "hello-world");
-    expect(parseDraftBranchName(branch)).toEqual({ username: "JohnDoe", collectionName: "posts", slug: "hello-world" });
+    expect(parseDraftBranchName(branch)).toEqual({ username: "JohnDoe", contentKey: "posts", slug: "hello-world" });
   });
 
   it.each([

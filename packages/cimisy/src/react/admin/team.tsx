@@ -51,7 +51,7 @@ export function TeamPage({ basePath, apiBasePath, isAdmin }: { basePath: string;
   return (
     <div>
       <a className="cimisy-crumb cimisy-link" href={basePath}>
-        &larr; Collections
+        &larr; Content
       </a>
       <h1 className="cimisy-heading">Team</h1>
       {!isAdmin ? (

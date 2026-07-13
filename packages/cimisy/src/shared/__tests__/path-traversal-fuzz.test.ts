@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { draftBranchName } from "../branch-name.js";
+import { assertSafeContentKey, draftBranchName } from "../branch-name.js";
 import { UnsafePathError } from "../errors.js";
 import { assertSafeRepoPath, assertSafeSlug, entryPathForSlug } from "../slug.js";
 
@@ -96,6 +96,44 @@ describe("path-traversal fuzz sweep", () => {
   describe("draftBranchName", () => {
     it.each(TRAVERSAL_PAYLOADS)("rejects unsafe slug %j in branch-name construction", (payload) => {
       expect(() => draftBranchName("alice", "posts", payload)).toThrow(UnsafePathError);
+    });
+
+    // Mixed case is legitimately allowed at the branch-grammar layer (the
+    // v2 collection-name rule permitted it; old branches must keep
+    // parsing) — config() is where the stricter lowercase key convention
+    // is enforced. Everything else in the corpus must still throw.
+    const contentKeyPayloads = TRAVERSAL_PAYLOADS.filter((p) => p !== "UPPERCASE" && p !== "MixedCase");
+
+    it.each(contentKeyPayloads)("rejects unsafe content key %j in branch-name construction", (payload) => {
+      expect(() => draftBranchName("alice", payload, "safe-slug")).toThrow(UnsafePathError);
+    });
+  });
+
+  describe("assertSafeContentKey (dotted-key grammar)", () => {
+    const contentKeyPayloads = TRAVERSAL_PAYLOADS.filter((p) => p !== "UPPERCASE" && p !== "MixedCase");
+    // Dot-specific payloads: content keys are the one place cimisy allows
+    // "." at all, so every dot-adjacent traversal/ref trick gets its own
+    // sweep — plus the shared corpus (dots or not, none of it is a key).
+    const DOTTED_PAYLOADS = [
+      "..",
+      "a..b",
+      ".a",
+      "a.",
+      ".",
+      "...",
+      "a...b",
+      "home.lock", // git rejects ref components ending in .lock
+      "a.%2e.b",
+      "a.․.b", // unicode "one dot leader" lookalike
+      "a.．.b", // fullwidth full stop lookalike
+      "a./b",
+      "a.b/c",
+      "a.b\\c",
+      "a.b\0c",
+      "a." + "b".repeat(200), // over the content-key length cap
+    ];
+    it.each([...contentKeyPayloads, ...DOTTED_PAYLOADS])("rejects: %j", (payload) => {
+      expect(() => assertSafeContentKey(payload)).toThrow(UnsafePathError);
     });
   });
 

@@ -40,7 +40,7 @@ export function ImageField({
   value,
   onChange,
   apiBasePath,
-  collectionName,
+  targetKey,
   slug,
   draftRef,
 }: {
@@ -48,7 +48,7 @@ export function ImageField({
   value: unknown;
   onChange: (value: string | null) => void;
   apiBasePath: string;
-  collectionName: string;
+  targetKey: string;
   slug: string | null;
   draftRef?: string;
 }) {
@@ -74,7 +74,7 @@ export function ImageField({
       const res = await fetch(apiUrl(apiBasePath, "/media"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ collectionName, slug, directory, filename: file.name, content }),
+        body: JSON.stringify({ targetKey, slug, directory, filename: file.name, content }),
       });
       const data = (await res.json()) as { path?: string; error?: string };
       if (!res.ok || !data.path) {

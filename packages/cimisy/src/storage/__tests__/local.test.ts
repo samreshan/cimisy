@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UnsafePathError } from "../../shared/errors.js";
 import { LocalStorageAdapter } from "../local.js";
 
@@ -19,12 +19,13 @@ describe("LocalStorageAdapter", () => {
   });
 
   it("refuses to construct under NODE_ENV=production without allowInProduction", () => {
-    const original = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
+    // vi.stubEnv rather than direct assignment: next's global types declare
+    // process.env.NODE_ENV readonly, and stubbing restores it reliably too.
+    vi.stubEnv("NODE_ENV", "production");
     try {
       expect(() => new LocalStorageAdapter({ rootDir })).toThrow();
     } finally {
-      process.env.NODE_ENV = original;
+      vi.unstubAllEnvs();
     }
   });
 

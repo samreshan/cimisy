@@ -2,8 +2,8 @@ import "server-only";
 import { cookies, draftMode } from "next/headers";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import type { CimisyConfig } from "../config/define-config.js";
-import { draftBranchName, parseDraftBranchName } from "../shared/branch-name.js";
+import type { ResolvedCimisyConfig } from "../config/define-config.js";
+import { draftBranchName, parseDraftBranchName, SINGLETON_DRAFT_SLUG } from "../shared/branch-name.js";
 import { DEFAULT_REF, resolveActor } from "./actor.js";
 
 export const PREVIEW_REF_COOKIE_NAME = "cimisy_preview_ref";
@@ -37,26 +37,52 @@ function safeRedirectPath(raw: string | null): string {
  * Drafts screen, M5) — without it, the ref is always derived from the
  * *viewer's own* identity via draftBranchName, which only ever resolves to
  * a branch the viewer themself would draft on. `ref` must parse as a
- * well-formed draft branch for the exact collection/slug being requested
- * (never trusted as an arbitrary ref straight from the client), and the
- * viewer still needs `read` on that entry — same check either way.
+ * well-formed draft branch for the exact content being requested (never
+ * trusted as an arbitrary ref straight from the client), and the viewer
+ * still needs `read` on that content — same check either way.
+ *
+ * Targets either `?collection=<key>&slug=<slug>` (a collection entry) or
+ * `?singleton=<key>` (a singleton/section, whose draft branches carry the
+ * reserved SINGLETON_DRAFT_SLUG).
  */
-export async function handlePreviewEnable(request: NextRequest, cimisyConfig: CimisyConfig): Promise<NextResponse> {
+export async function handlePreviewEnable(request: NextRequest, cimisyConfig: ResolvedCimisyConfig): Promise<NextResponse> {
   const actor = await resolveActor(request, cimisyConfig);
   if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const collectionName = request.nextUrl.searchParams.get("collection");
-  const slug = request.nextUrl.searchParams.get("slug");
+  const collectionKey = request.nextUrl.searchParams.get("collection");
+  const singletonKey = request.nextUrl.searchParams.get("singleton");
+  const slugParam = request.nextUrl.searchParams.get("slug");
   const redirectTo = safeRedirectPath(request.nextUrl.searchParams.get("redirectTo"));
   const refParam = request.nextUrl.searchParams.get("ref");
-  if (!collectionName || !slug) {
-    return NextResponse.json({ error: "\"collection\" and \"slug\" query params are required." }, { status: 400 });
+
+  let contentKey: string;
+  let slug: string;
+  let permissionPath: string;
+  if (singletonKey) {
+    if (collectionKey) {
+      return NextResponse.json({ error: "Pass either \"collection\" or \"singleton\", not both." }, { status: 400 });
+    }
+    const def = cimisyConfig.singletonsByKey[singletonKey];
+    if (!def) return NextResponse.json({ error: `Unknown singleton "${singletonKey}"` }, { status: 404 });
+    contentKey = singletonKey;
+    slug = SINGLETON_DRAFT_SLUG;
+    permissionPath = def.path;
+  } else {
+    if (!collectionKey || !slugParam) {
+      return NextResponse.json(
+        { error: "\"collection\" and \"slug\" query params (or \"singleton\") are required." },
+        { status: 400 },
+      );
+    }
+    const def = cimisyConfig.collectionsByKey[collectionKey];
+    if (!def) return NextResponse.json({ error: `Unknown collection "${collectionKey}"` }, { status: 404 });
+    contentKey = collectionKey;
+    slug = slugParam;
+    permissionPath = `${def.directory}/${slug}${def.extension}`;
   }
-  const def = cimisyConfig.collections[collectionName];
-  if (!def) return NextResponse.json({ error: `Unknown collection "${collectionName}"` }, { status: 404 });
 
   try {
-    actor.requirePermission("read", `${def.directory}/${slug}${def.extension}`);
+    actor.requirePermission("read", permissionPath);
   } catch {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -64,14 +90,14 @@ export async function handlePreviewEnable(request: NextRequest, cimisyConfig: Ci
   let ref: string;
   if (refParam) {
     const parsed = parseDraftBranchName(refParam);
-    if (!parsed || parsed.collectionName !== collectionName || parsed.slug !== slug) {
+    if (!parsed || parsed.contentKey !== contentKey || parsed.slug !== slug) {
       return NextResponse.json({ error: "Invalid ref." }, { status: 400 });
     }
     ref = refParam;
   } else {
     // Direct-publish roles have no separate draft state — their content is
     // always on the default branch, so "preview" is just the live ref.
-    ref = actor.directPublish ? DEFAULT_REF : draftBranchName(actor.login, collectionName, slug);
+    ref = actor.directPublish ? DEFAULT_REF : draftBranchName(actor.login, contentKey, slug);
   }
 
   const dm = await draftMode();
