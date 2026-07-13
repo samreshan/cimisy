@@ -22,7 +22,13 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 11
+          # Pinned to an exact patch, not a floating major: pnpm 11.12.0's
+          # self-installer crashes ("Cannot use 'in' operator to search for
+          # 'integrity' in undefined") parsing this repo's lockfile, which
+          # broke CI on every push/PR from 2026-07-13 onward regardless of
+          # what changed in the repo. Bump deliberately once a working
+          # newer patch is confirmed, not by widening back to a range.
+          version: 11.10.0
 
       - uses: actions/setup-node@v6
         with:
