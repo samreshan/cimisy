@@ -539,7 +539,7 @@ a.cimisy-card:hover {
   border-radius: var(--cimisy-radius-lg);
   background: #fff;
 }
-/* Page group cards on the content-tree home screen (v3 hierarchy). */
+/* Page group cards on the content-tree home screen. */
 .cimisy-page-group {
   border: 1px solid var(--cimisy-border);
   border-radius: var(--cimisy-radius-lg);

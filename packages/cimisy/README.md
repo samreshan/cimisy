@@ -214,7 +214,7 @@ Built-in block kinds, each returning a `BlockDefinition` that declares its own z
 
 ## Pages, sections & singletons
 
-Real sites aren't one flat list of collections — a home page has a hero, some testimonials, maybe a feature grid. v3 lets the config say exactly that, and the admin UI mirrors it:
+Real sites aren't one flat list of collections — a home page has a hero, some testimonials, maybe a feature grid. Pages and sections let the config say exactly that, and the admin UI mirrors it:
 
 ```ts
 import { collection, config, fields, page, section, singleton } from "cimisy/config";

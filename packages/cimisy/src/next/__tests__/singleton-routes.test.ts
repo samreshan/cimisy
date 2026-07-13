@@ -18,7 +18,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
 const SESSION_SECRET = "test-session-secret";
 
 /**
- * A full v3-shaped config: a top-level collection, a top-level singleton,
+ * A full hierarchical config: a top-level collection, a top-level singleton,
  * and a page with a static section + nested collection — exercising the
  * hierarchy end-to-end through the real handler.
  */

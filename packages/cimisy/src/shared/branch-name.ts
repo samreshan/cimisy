@@ -33,8 +33,8 @@ function assertSafeRefComponent(value: string, label: string): void {
  * segments are impossible by construction; a trailing ".lock" (git
  * refuses refs whose components end in ".lock") is rejected here as well
  * as at config() time. Each segment reuses SAFE_REF_COMPONENT, which
- * makes this grammar a strict superset of the v2 collection-name rule —
- * pre-v3 draft branches keep parsing.
+ * makes this grammar a strict superset of the original flat collection-name
+ * rule — draft branches from a flat, pre-hierarchy config keep parsing.
  */
 export function assertSafeContentKey(key: string): asserts key is string {
   if (key.length === 0 || key.length > MAX_CONTENT_KEY_LENGTH) {

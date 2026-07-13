@@ -21,7 +21,7 @@ describe("block registry round-trips", () => {
     expect(parsed[0]?.props).toEqual({ content: [{ type: "text", text: "Hello, world." }] });
   });
 
-  it("paragraph: bold/italic/inline-code/link inline formatting survives serialize -> parse (v2 rich text)", () => {
+  it("paragraph: bold/italic/inline-code/link inline formatting survives serialize -> parse (rich text)", () => {
     const registry = { paragraph: paragraph() };
     const content = [
       { type: "text", text: "Say " },

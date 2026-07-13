@@ -99,9 +99,10 @@ describe("path-traversal fuzz sweep", () => {
     });
 
     // Mixed case is legitimately allowed at the branch-grammar layer (the
-    // v2 collection-name rule permitted it; old branches must keep
-    // parsing) — config() is where the stricter lowercase key convention
-    // is enforced. Everything else in the corpus must still throw.
+    // original flat collection-name rule permitted it; old branches must
+    // keep parsing) — config() is where the stricter lowercase key
+    // convention is enforced. Everything else in the corpus must still
+    // throw.
     const contentKeyPayloads = TRAVERSAL_PAYLOADS.filter((p) => p !== "UPPERCASE" && p !== "MixedCase");
 
     it.each(contentKeyPayloads)("rejects unsafe content key %j in branch-name construction", (payload) => {

@@ -89,7 +89,7 @@ describe("assertSafeContentKey", () => {
     expect(() => assertSafeContentKey("home.hero-banner")).not.toThrow();
   });
 
-  it("stays a superset of the v2 collection-name grammar (mixed case parses, for old branches)", () => {
+  it("stays a superset of the original flat collection-name grammar (mixed case parses, for old branches)", () => {
     expect(() => assertSafeContentKey("blogPosts")).not.toThrow();
   });
 
@@ -120,7 +120,7 @@ describe("parseDraftBranchName", () => {
     });
   });
 
-  it("still parses a pre-v3 (flat collection) branch", () => {
+  it("still parses a legacy flat-collection branch", () => {
     expect(parseDraftBranchName("cimisy/JohnDoe/posts/hello-world")).toEqual({
       username: "JohnDoe",
       contentKey: "posts",

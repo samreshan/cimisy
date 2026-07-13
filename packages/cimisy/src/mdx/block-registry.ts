@@ -15,12 +15,12 @@ function textNode(value: string): Content {
 }
 
 /**
- * Accepts the v1 `{ text: string }` shape and upgrades it to the v2
- * `{ content: InlineNode[] }` shape before the real schema runs. On-disk
- * v1 files need no migration at all — parse.ts always rebuilds `content`
- * fresh from mdast, so this shim exists purely for in-flight v1 clients
- * (e.g. a browser tab open across a deploy) whose last unsaved edit is
- * still in the old shape.
+ * Accepts the legacy `{ text: string }` shape (from 1.x) and upgrades it to
+ * the current `{ content: InlineNode[] }` shape before the real schema
+ * runs. On-disk 1.x files need no migration at all — parse.ts always
+ * rebuilds `content` fresh from mdast, so this shim exists purely for
+ * in-flight 1.x clients (e.g. a browser tab open across a deploy) whose
+ * last unsaved edit is still in the old shape.
  */
 function upgradeLegacyText(value: unknown): unknown {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -35,8 +35,8 @@ function upgradeLegacyText(value: unknown): unknown {
 
 /**
  * Standard markdown paragraph, no JSX. Inline formatting (bold/italic/
- * inline-code/links) is a first-class `content: InlineNode[]` prop as of
- * v2 — see mdx/inline.ts. Any *other* inline markdown a hand-editor might
+ * inline-code/links) is a first-class `content: InlineNode[]` prop — see
+ * mdx/inline.ts. Any *other* inline markdown a hand-editor might
  * add (strikethrough, footnotes, hard breaks, ...) still flattens to
  * plain text rather than being rejected: it's 100% inert markdown with
  * zero code-execution surface, so the fail-closed posture that applies to

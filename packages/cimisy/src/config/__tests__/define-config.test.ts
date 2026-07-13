@@ -129,7 +129,7 @@ describe("config() normalization", () => {
     });
   });
 
-  it("keeps a flat v2-style config byte-identical in behavior (same keys, same paths)", () => {
+  it("keeps a flat, pre-hierarchy config byte-identical in behavior (same keys, same paths)", () => {
     const resolved = config({
       source: makeSource(),
       collections: {
