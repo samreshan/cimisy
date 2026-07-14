@@ -1,4 +1,8 @@
-# cimisy
+<p align="center">
+  <img src="https://raw.githubusercontent.com/samreshan/cimisy/main/assets/cimisy-logo.png" alt="cimisy" height="56">
+</p>
+
+<p align="center"><strong>The CMS that moves into your repo.</strong></p>
 
 A git-based, security-first CMS that installs directly into an existing Next.js app. No hosted server, no database — content is plain MDX + YAML frontmatter, versioned in your own git repo (local disk in dev, GitHub in production). There is nothing to export because there was never any lock-in to begin with: the content was always just files in your repo.
 

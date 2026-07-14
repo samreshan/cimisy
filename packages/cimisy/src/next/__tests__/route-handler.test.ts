@@ -16,7 +16,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
   publicKeyEncoding: { type: "pkcs1", format: "pem" },
 });
 
-const SESSION_SECRET = "test-session-secret";
+const SESSION_SECRET = "test-session-secret-0123456789ab";
 
 function buildConfig(fake: FakeGithubApi): ResolvedCimisyConfig {
   return config({
@@ -100,14 +100,14 @@ describe("route-handler RBAC integration", () => {
   });
 
   it("rejects unauthenticated requests with 401, not silently as local mode", async () => {
-    const res = await handler.GET(req("http://x/api/cimisy/collections/posts"), { params: { route: ["collections", "posts"] } });
+    const res = await handler.GET(req("http://x/api/cimisy/collections/posts"), { params: Promise.resolve({ route: ["collections", "posts"] }) });
     expect(res.status).toBe(401);
   });
 
   it("rejects a GitHub-authenticated user who has no assigned role (403)", async () => {
     const cookie = await sessionCookieFor("outsider", "1001");
     const res = await handler.GET(req("http://x/api/cimisy/collections/posts", { headers: { cookie } }), {
-      params: { route: ["collections", "posts"] },
+      params: Promise.resolve({ route: ["collections", "posts"] }),
     });
     expect(res.status).toBe(403);
   });
@@ -117,7 +117,7 @@ describe("route-handler RBAC integration", () => {
     const cookie = await sessionCookieFor("admin-user-1", "2001");
 
     const getRes = await handler.GET(req("http://x/api/cimisy/collections/posts", { headers: { cookie } }), {
-      params: { route: ["collections", "posts"] },
+      params: Promise.resolve({ route: ["collections", "posts"] }),
     });
     expect(getRes.status).toBe(200);
 
@@ -127,7 +127,7 @@ describe("route-handler RBAC integration", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { title: "Hello Admin" } }),
       }),
-      { params: { route: ["collections", "posts"] } },
+      { params: Promise.resolve({ route: ["collections", "posts"] }) },
     );
     expect(postRes.status).toBe(200);
     const postBody = (await postRes.json()) as { publish: { status: string } };
@@ -145,7 +145,7 @@ describe("route-handler RBAC integration", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { title: "Hello Editor" } }),
       }),
-      { params: { route: ["collections", "posts"] } },
+      { params: Promise.resolve({ route: ["collections", "posts"] }) },
     );
     expect(postRes.status).toBe(200);
     const postBody = (await postRes.json()) as { publish: { status: string; branch?: string; pullRequestUrl?: string } };
@@ -168,7 +168,7 @@ describe("route-handler RBAC integration", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { title: "Should Not Land" } }),
       }),
-      { params: { route: ["collections", "posts"] } },
+      { params: Promise.resolve({ route: ["collections", "posts"] }) },
     );
     expect(postRes.status).toBe(403);
     expect(fake.filesOnBranch("main").has("content/posts/should-not-land.mdx")).toBe(false);
@@ -187,7 +187,7 @@ describe("route-handler RBAC integration", () => {
         // from the body, so they must have zero effect.
         body: JSON.stringify({ values: { title: "Forged" }, role: "admin", isAdmin: true, directPublish: true }),
       }),
-      { params: { route: ["collections", "posts"] } },
+      { params: Promise.resolve({ route: ["collections", "posts"] }) },
     );
     expect(postRes.status).toBe(403);
     expect(fake.filesOnBranch("main").has("content/posts/forged.mdx")).toBe(false);
@@ -204,7 +204,7 @@ describe("route-handler RBAC integration", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ values: { title, slug: "same-post" }, baseVersion }),
         }),
-        { params: { route: ["collections", "posts"] } },
+        { params: Promise.resolve({ route: ["collections", "posts"] }) },
       );
     }
 
@@ -231,14 +231,14 @@ describe("route-handler RBAC integration", () => {
         headers: { cookie: adminCookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { title: "To Delete" } }),
       }),
-      { params: { route: ["collections", "posts"] } },
+      { params: Promise.resolve({ route: ["collections", "posts"] }) },
     );
     expect(fake.filesOnBranch("main").has("content/posts/to-delete.mdx")).toBe(true);
 
     const viewerCookie = await sessionCookieFor("viewer-user-3", "4003");
     const deleteRes = await handler.DELETE(
       req("http://x/api/cimisy/collections/posts/to-delete", { method: "DELETE", headers: { cookie: viewerCookie } }),
-      { params: { route: ["collections", "posts", "to-delete"] } },
+      { params: Promise.resolve({ route: ["collections", "posts", "to-delete"] }) },
     );
     expect(deleteRes.status).toBe(403);
     expect(fake.filesOnBranch("main").has("content/posts/to-delete.mdx")).toBe(true); // untouched
@@ -254,12 +254,12 @@ describe("route-handler RBAC integration", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ values: { title: "History Test" } }),
         }),
-        { params: { route: ["collections", "posts"] } },
+        { params: Promise.resolve({ route: ["collections", "posts"] }) },
       );
 
       const res = await handler.GET(
         req("http://x/api/cimisy/collections/posts/history-test/history", { headers: { cookie } }),
-        { params: { route: ["collections", "posts", "history-test", "history"] } },
+        { params: Promise.resolve({ route: ["collections", "posts", "history-test", "history"] }) },
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { supported: boolean; history: Array<{ message: string }> };
@@ -271,7 +271,7 @@ describe("route-handler RBAC integration", () => {
       const cookie = await sessionCookieFor("viewer-user-4", "4004");
       const res = await handler.GET(
         req("http://x/api/cimisy/collections/posts/anything/history", { headers: { cookie } }),
-        { params: { route: ["collections", "posts", "anything", "history"] } },
+        { params: Promise.resolve({ route: ["collections", "posts", "anything", "history"] }) },
       );
       // viewer role's default rules permit read everywhere, so this should
       // succeed (200) even though the entry itself may not exist — history
@@ -284,7 +284,7 @@ describe("route-handler RBAC integration", () => {
       const cookie = await sessionCookieFor("admin-user-8", "2008");
       const res = await handler.GET(
         req("http://x/api/cimisy/collections/posts/..%2F..%2Fetc%2Fpasswd/history", { headers: { cookie } }),
-        { params: { route: ["collections", "posts", "../../etc/passwd", "history"] } },
+        { params: Promise.resolve({ route: ["collections", "posts", "../../etc/passwd", "history"] }) },
       );
       expect(res.status).toBe(400);
     });
@@ -300,7 +300,7 @@ describe("route-handler RBAC integration", () => {
           headers: { cookie, "content-type": "application/json", origin: "https://evil.com" },
           body: JSON.stringify({ values: { title: "CSRF Attempt" } }),
         }),
-        { params: { route: ["collections", "posts"] } },
+        { params: Promise.resolve({ route: ["collections", "posts"] }) },
       );
       expect(res.status).toBe(403);
       expect(fake.filesOnBranch("main").has("content/posts/csrf-attempt.mdx")).toBe(false);
@@ -314,7 +314,7 @@ describe("route-handler RBAC integration", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { title: "No Origin" } }),
       });
-      const res = await handler.POST(bareRequest, { params: { route: ["collections", "posts"] } });
+      const res = await handler.POST(bareRequest, { params: Promise.resolve({ route: ["collections", "posts"] }) });
       expect(res.status).toBe(403);
     });
 
@@ -326,7 +326,7 @@ describe("route-handler RBAC integration", () => {
         headers: { cookie, "content-type": "application/json", referer: "http://x/admin/posts/new" },
         body: JSON.stringify({ values: { title: "Referer Fallback" } }),
       });
-      const res = await handler.POST(refererRequest, { params: { route: ["collections", "posts"] } });
+      const res = await handler.POST(refererRequest, { params: Promise.resolve({ route: ["collections", "posts"] }) });
       expect(res.status).toBe(200);
     });
 
@@ -334,7 +334,7 @@ describe("route-handler RBAC integration", () => {
       seedRoster(fake, [{ githubId: "2006", githubLogin: "admin-user-6", role: "admin" }]);
       const cookie = await sessionCookieFor("admin-user-6", "2006");
       const bareGet = new NextRequest(new URL("http://x/api/cimisy/collections/posts"), { headers: { cookie } });
-      const res = await handler.GET(bareGet, { params: { route: ["collections", "posts"] } });
+      const res = await handler.GET(bareGet, { params: Promise.resolve({ route: ["collections", "posts"] }) });
       expect(res.status).toBe(200);
     });
   });
@@ -355,7 +355,7 @@ describe("route-handler RBAC integration", () => {
             headers: { cookie, "content-type": "application/json" },
             body: JSON.stringify({ values: { title } }),
           }),
-          { params: { route: ["collections", "posts"] } },
+          { params: Promise.resolve({ route: ["collections", "posts"] }) },
         );
       }
 
@@ -385,7 +385,7 @@ describe("route-handler RBAC integration", () => {
             headers: { cookie, "content-type": "application/json" },
             body: JSON.stringify({ values: { title } }),
           }),
-          { params: { route: ["collections", "posts"] } },
+          { params: Promise.resolve({ route: ["collections", "posts"] }) },
         );
       }
 
@@ -397,7 +397,7 @@ describe("route-handler RBAC integration", () => {
 
   describe("/auth/me", () => {
     it("reports unauthenticated with no session cookie", async () => {
-      const res = await handler.GET(req("http://x/api/cimisy/auth/me"), { params: { route: ["auth", "me"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/auth/me"), { params: Promise.resolve({ route: ["auth", "me"] }) });
       const body = (await res.json()) as { authenticated: boolean };
       expect(body).toEqual({ authenticated: false });
     });
@@ -405,7 +405,7 @@ describe("route-handler RBAC integration", () => {
     it("reports pending (not a 500) for a signed-in user with no assigned role yet", async () => {
       const cookie = await sessionCookieFor("newcomer", "5001");
       const res = await handler.GET(req("http://x/api/cimisy/auth/me", { headers: { cookie } }), {
-        params: { route: ["auth", "me"] },
+        params: Promise.resolve({ route: ["auth", "me"] }),
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { authenticated: boolean; role: string | null; pending: boolean; user: { id: string } };
@@ -419,7 +419,7 @@ describe("route-handler RBAC integration", () => {
       seedRoster(fake, [{ githubId: "5002", githubLogin: "assigned", role: "editor" }]);
       const cookie = await sessionCookieFor("assigned", "5002");
       const res = await handler.GET(req("http://x/api/cimisy/auth/me", { headers: { cookie } }), {
-        params: { route: ["auth", "me"] },
+        params: Promise.resolve({ route: ["auth", "me"] }),
       });
       const body = (await res.json()) as { authenticated: boolean; role: string | null; pending: boolean; user: { id: string } };
       expect(body.authenticated).toBe(true);
@@ -431,14 +431,14 @@ describe("route-handler RBAC integration", () => {
 
   describe("/users (admin-only roster management)", () => {
     it("rejects an unauthenticated request", async () => {
-      const res = await handler.GET(req("http://x/api/cimisy/users"), { params: { route: ["users"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/users"), { params: Promise.resolve({ route: ["users"] }) });
       expect(res.status).toBe(401);
     });
 
     it("rejects a non-admin (a pending user, or a role without manageUsers)", async () => {
       seedRoster(fake, [{ githubId: "6001", githubLogin: "editor-user-6", role: "editor" }]);
       const cookie = await sessionCookieFor("editor-user-6", "6001");
-      const res = await handler.GET(req("http://x/api/cimisy/users", { headers: { cookie } }), { params: { route: ["users"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/users", { headers: { cookie } }), { params: Promise.resolve({ route: ["users"] }) });
       expect(res.status).toBe(403);
     });
 
@@ -448,7 +448,7 @@ describe("route-handler RBAC integration", () => {
         { githubId: "6003", githubLogin: "editor-user-7", role: "editor" },
       ]);
       const cookie = await sessionCookieFor("admin-user-12", "6002");
-      const res = await handler.GET(req("http://x/api/cimisy/users", { headers: { cookie } }), { params: { route: ["users"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/users", { headers: { cookie } }), { params: Promise.resolve({ route: ["users"] }) });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { users: Array<{ githubLogin: string }> };
       expect(body.users.map((u) => u.githubLogin).sort()).toEqual(["admin-user-12", "editor-user-7"]);
@@ -466,7 +466,7 @@ describe("route-handler RBAC integration", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ githubId: "6005", role: "publisher" }),
         }),
-        { params: { route: ["users"] } },
+        { params: Promise.resolve({ route: ["users"] }) },
       );
       expect(res.status).toBe(403);
     });
@@ -483,7 +483,7 @@ describe("route-handler RBAC integration", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ githubId: "6007", role: "publisher" }),
         }),
-        { params: { route: ["users"] } },
+        { params: Promise.resolve({ route: ["users"] }) },
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { users: Array<{ githubId: string; role: string | null; updatedBy: string }> };
@@ -501,7 +501,7 @@ describe("route-handler RBAC integration", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ githubId: "6008", role: "editor" }),
         }),
-        { params: { route: ["users"] } },
+        { params: Promise.resolve({ route: ["users"] }) },
       );
       expect(res.status).toBe(400);
     });
@@ -518,7 +518,7 @@ describe("route-handler RBAC integration", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ githubId: "6010", role: "editor" }),
         }),
-        { params: { route: ["users"] } },
+        { params: Promise.resolve({ route: ["users"] }) },
       );
       expect(res.status).toBe(200);
     });
@@ -532,7 +532,7 @@ describe("route-handler RBAC integration", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ githubId: "does-not-exist", role: "editor" }),
         }),
-        { params: { route: ["users"] } },
+        { params: Promise.resolve({ route: ["users"] }) },
       );
       expect(res.status).toBe(404);
     });
@@ -546,7 +546,7 @@ describe("route-handler RBAC integration", () => {
           headers: { cookie, "content-type": "application/json", origin: "https://evil.com" },
           body: JSON.stringify({ githubId: "6012", role: "editor" }),
         }),
-        { params: { route: ["users"] } },
+        { params: Promise.resolve({ route: ["users"] }) },
       );
       expect(res.status).toBe(403);
     });

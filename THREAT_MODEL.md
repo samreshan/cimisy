@@ -64,8 +64,8 @@ cimisy installs directly into a Next.js app and holds write credentials to the a
 **Mitigation:** `safeRedirectPath` (`src/next/draft-mode.ts`) only accepts same-origin relative paths; absolute and protocol-relative (`//evil.com`) targets are neutralized to `/`.
 **Verified by:** `draft-mode.test.ts` and `route-handler.test.ts`.
 
-### 12. Brute-forcing/abuse of the OAuth callback or admin writes
-**Mitigation:** `src/security/rate-limit.ts`'s `RateLimiter` interface, applied to the OAuth callback (IP-keyed — there's no identity yet at that point) and admin API writes (identity-keyed — the realistic abuse case is a compromised/buggy authenticated client, not anonymous traffic). The shipped default is explicitly **not** safe to rely on across multiple serverless instances (see its own doc comment) — it's a sane local-dev/single-instance default, not a scalability promise. Production deployments on serverless/multi-instance infra should supply their own `RateLimiter` backed by shared storage.
+### 12. Brute-forcing/abuse of the OAuth login/callback or admin writes
+**Mitigation:** `src/security/rate-limit.ts`'s `RateLimiter` interface, applied to both OAuth entry points — `/auth/login` and `/auth/callback` (IP-keyed, sharing the same bucket — there's no identity yet at that point) — and admin API writes (identity-keyed — the realistic abuse case is a compromised/buggy authenticated client, not anonymous traffic). The shipped default is explicitly **not** safe to rely on across multiple serverless instances (see its own doc comment) — it's a sane local-dev/single-instance default, not a scalability promise. Production deployments on serverless/multi-instance infra should supply their own `RateLimiter` backed by shared storage.
 **Verified by:** `rate-limit.test.ts` and a live test confirming a 429 with a `Retry-After` header once the limit is exceeded.
 
 ### 13. YAML frontmatter type-coercion / tag-execution tricks
@@ -82,3 +82,4 @@ cimisy installs directly into a Next.js app and holds write credentials to the a
 - **No raw-MDX editing escape hatch exists yet.** If one is added later, it must be forced through the identical `assertSafeMdxTree` validator before persisting, and gated behind an explicit `admin`-only, opt-in flag (see `SECURITY.md`).
 - **Webhook signature verification is not yet implemented.** Webhooks aren't on the critical read/write path in v1 (installation-removed/PR-merged events aren't consumed by anything yet), so this is deferred rather than a live gap.
 - **Media/asset storage is in-repo only for v1.** No separate upload endpoint exists yet, so there's no additional surface to secure there.
+- **`/preview/enable` is a state-changing `GET`.** It only flips draft-mode on for the requesting browser (no data exposure — draft content still goes through the normal RBAC-gated read path), so a cross-site top-level navigation that triggers it is low impact: at most an unwanted UI toggle, not a data leak or write. Not redesigned as a `POST` because that would break the plain `<a href>`/direct-link preview flow it exists for.

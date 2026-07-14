@@ -4,7 +4,7 @@ cimisy holds write credentials to your GitHub repository (via a GitHub App) and 
 
 ## Supported versions
 
-cimisy is pre-1.0 (currently at milestone M6 of the v1 roadmap). Until a 1.0 release, only the latest published version receives security fixes. There is no long-term-support branch yet.
+Only the latest published 2.x version receives security fixes. There is no long-term-support branch yet.
 
 ## Reporting a vulnerability
 

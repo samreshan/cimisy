@@ -23,7 +23,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
   publicKeyEncoding: { type: "pkcs1", format: "pem" },
 });
 
-const SESSION_SECRET = "test-session-secret";
+const SESSION_SECRET = "test-session-secret-0123456789ab";
 
 function buildConfig(fake: FakeGithubApi): ResolvedCimisyConfig {
   return config({

@@ -29,7 +29,7 @@ function buildConfig(fake: FakeGithubApi): ResolvedCimisyConfig {
       privateKey,
       clientId: "client-id",
       clientSecret: "client-secret",
-      sessionSecret: "session-secret",
+      sessionSecret: "session-secret-0123456789abcdef0",
     }),
     collections: {
       posts: collection({
@@ -123,7 +123,7 @@ describe("createReader — singletons and pages", () => {
         privateKey,
         clientId: "client-id",
         clientSecret: "client-secret",
-        sessionSecret: "session-secret",
+        sessionSecret: "session-secret-0123456789abcdef0",
       }),
       singletons: {
         settings: singleton({

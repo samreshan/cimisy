@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { CimisyError, UnsafePathError } from "../shared/errors.js";
 import type {
@@ -89,20 +90,28 @@ export class LocalStorageAdapter implements StorageAdapter {
 
   async list(dirPrefix: string): Promise<FileMeta[]> {
     const absDir = resolveSafe(this.rootDir, dirPrefix);
-    let entries: string[];
+    let entries: Dirent[];
     try {
-      entries = await readdir(absDir);
+      entries = await readdir(absDir, { withFileTypes: true });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw err;
     }
     const results: FileMeta[] = [];
     for (const entry of entries) {
-      const entryAbsPath = join(absDir, entry);
-      const entryStat = await stat(entryAbsPath);
-      if (!entryStat.isFile()) continue;
-      const buffer = await readFile(entryAbsPath);
-      results.push({ path: `${dirPrefix}/${entry}`, version: hashBuffer(buffer) });
+      if (!entry.isFile()) continue;
+      const entryAbsPath = join(absDir, entry.name);
+      // No stat()-then-read: read directly and skip if the entry vanished or
+      // turned out to be a directory (e.g. replaced) between readdir and here.
+      let buffer: Buffer;
+      try {
+        buffer = await readFile(entryAbsPath);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "EISDIR") continue;
+        throw err;
+      }
+      results.push({ path: `${dirPrefix}/${entry.name}`, version: hashBuffer(buffer) });
     }
     return results;
   }

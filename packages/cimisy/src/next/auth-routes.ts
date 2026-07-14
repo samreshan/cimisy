@@ -19,7 +19,22 @@ import {
 
 const DEFAULT_POST_LOGIN_REDIRECT = "/admin";
 
-export async function handleLogin(request: NextRequest, source: GithubIntegratedSource): Promise<NextResponse> {
+export async function handleLogin(
+  request: NextRequest,
+  source: GithubIntegratedSource,
+  rateLimiter?: RateLimiter,
+): Promise<NextResponse> {
+  // Same IP-keyed limiter as the callback below: unauthenticated, so there's
+  // no identity to key on, and it's the entry point an attacker would hammer
+  // to spam GitHub's authorize endpoint or churn oauth-state cookies.
+  if (rateLimiter) {
+    const result = await rateLimiter.consume(`auth:${clientIpFromRequest(request)}`);
+    if (!result.allowed) {
+      const headers = result.retryAfterMs ? { "Retry-After": String(Math.ceil(result.retryAfterMs / 1000)) } : undefined;
+      return NextResponse.json({ error: "Too many sign-in attempts — please slow down." }, { status: 429, headers });
+    }
+  }
+
   const state = generateOauthState();
   const redirectUri = new URL("/api/cimisy/auth/callback", request.nextUrl.origin).toString();
   const authorizeUrl = buildAuthorizeUrl({ clientId: source.credentials.clientId, redirectUri, state });

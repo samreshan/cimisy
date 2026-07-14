@@ -175,7 +175,7 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
     if (!isGithubSource(cimisyConfig.source)) {
       return NextResponse.json({ error: "Auth routes require the GitHub source." }, { status: 404 });
     }
-    if (action === "login") return handleLogin(request, cimisyConfig.source);
+    if (action === "login") return handleLogin(request, cimisyConfig.source, cimisyConfig.rateLimiter);
     if (action === "callback") {
       return handleCallback(request, cimisyConfig.source, cimisyConfig.rateLimiter, cimisyConfig.roleMapping);
     }
@@ -601,6 +601,10 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
       const path = buildMediaPath(body.directory, body.filename, type.extension);
       actor.requirePermission("write", path);
 
+      if (!cimisyConfig.collectionsByKey[body.targetKey] && !cimisyConfig.singletonsByKey[body.targetKey]) {
+        return NextResponse.json({ error: `Unknown content key "${body.targetKey}"` }, { status: 404 });
+      }
+
       const { ref, publish } = await resolveWriteRef(actor, body.targetKey, body.slug);
 
       const result = await cimisyConfig.source.commitChange({
@@ -684,10 +688,13 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
     }
   }
 
-  // Next 14 passes `params` as a plain object; Next 15 made it a Promise.
-  // `await` resolves either form correctly (awaiting a non-thenable value
-  // just yields that value), so one handler shape supports both.
-  type RouteParams = { route: string[] } | Promise<{ route: string[] }>;
+  // Typed strictly as a Promise to match Next 15's route-handler type
+  // generation (next build validates the exported GET/POST/PUT/DELETE
+  // against a Promise-only `params` type). `await` also resolves a
+  // plain object correctly (awaiting a non-thenable value just yields
+  // that value), so this still works at runtime under Next 14, which
+  // passes `params` synchronously.
+  type RouteParams = Promise<{ route: string[] }>;
 
   return {
     GET: async (request: NextRequest, context: { params: RouteParams }) => {

@@ -22,7 +22,7 @@ function makeSource(fake: FakeGithubApi): GithubIntegratedSource {
     privateKey,
     clientId: "client-id",
     clientSecret: "client-secret",
-    sessionSecret: "session-secret",
+    sessionSecret: "session-secret-0123456789abcdef0",
   });
 }
 

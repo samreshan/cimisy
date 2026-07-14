@@ -1,4 +1,5 @@
 import { createReader, type CollectionReader, type SingletonReader } from "cimisy/next";
+import Link from "next/link";
 import cimisyConfig from "@/cimisy.config";
 
 const reader = createReader(cimisyConfig);
@@ -23,10 +24,10 @@ export default async function HomePage() {
         )}
       </p>
       <p>
-        <a href="/admin">Open the admin panel &rarr;</a>
+        <Link href="/admin">Open the admin panel &rarr;</Link>
       </p>
       <p>
-        <a href="/blog">View the public blog &rarr;</a>
+        <Link href="/blog">View the public blog &rarr;</Link>
       </p>
       {testimonials.length > 0 && (
         <section>

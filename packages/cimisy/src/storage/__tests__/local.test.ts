@@ -144,6 +144,21 @@ describe("LocalStorageAdapter", () => {
     expect(await adapter.list("nonexistent")).toEqual([]);
   });
 
+  it("skips subdirectories when listing", async () => {
+    await adapter.commitChange({
+      ref: "main",
+      baseVersion: null,
+      message: "create",
+      author: { id: "1", name: "T", email: "t@example.com" },
+      writes: [
+        { path: "posts/a.mdx", content: "a" },
+        { path: "posts/nested/b.mdx", content: "b" },
+      ],
+    });
+    const files = await adapter.list("posts");
+    expect(files.map((f) => f.path)).toEqual(["posts/a.mdx"]);
+  });
+
   it("commits a base64-encoded binary file and reads its raw bytes back unchanged", async () => {
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03]);
     const base64 = pngBytes.toString("base64");

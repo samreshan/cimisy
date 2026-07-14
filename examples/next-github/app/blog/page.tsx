@@ -1,4 +1,5 @@
 import { createReader } from "cimisy/next";
+import Link from "next/link";
 import cimisyConfig from "@/cimisy.config";
 
 const reader = createReader(cimisyConfig);
@@ -9,7 +10,7 @@ export default async function BlogIndexPage() {
   return (
     <main>
       <p>
-        <a href="/">&larr; Home</a>
+        <Link href="/">&larr; Home</Link>
       </p>
       <h1>Blog</h1>
       {posts.length === 0 ? (
@@ -18,7 +19,7 @@ export default async function BlogIndexPage() {
         <ul>
           {posts.map((post) => (
             <li key={post.slug}>
-              <a href={`/blog/${post.slug}`}>{post.error ? `${post.slug} (failed to parse)` : String(post.values.title)}</a>
+              <Link href={`/blog/${post.slug}`}>{post.error ? `${post.slug} (failed to parse)` : String(post.values.title)}</Link>
             </li>
           ))}
         </ul>

@@ -16,7 +16,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
   publicKeyEncoding: { type: "pkcs1", format: "pem" },
 });
 
-const SESSION_SECRET = "test-session-secret";
+const SESSION_SECRET = "test-session-secret-0123456789ab";
 
 function buildConfig(fake: FakeGithubApi): ResolvedCimisyConfig {
   return config({
@@ -105,7 +105,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
 
   describe("GET /drafts", () => {
     it("rejects unauthenticated requests with 401", async () => {
-      const res = await handler.GET(req("http://x/api/cimisy/drafts"), { params: { route: ["drafts"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/drafts"), { params: Promise.resolve({ route: ["drafts"] }) });
       expect(res.status).toBe(401);
     });
 
@@ -113,7 +113,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       fake.seedPullRequest({ head: "cimisy/ed-user/posts/mine", base: "main", title: "My draft", authorLogin: "ed-user" });
       fake.seedPullRequest({ head: "cimisy/ed-user-2/posts/theirs", base: "main", title: "Their draft", authorLogin: "ed-user-2" });
       const cookie = await sessionCookieFor("ed-user", "3");
-      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: Promise.resolve({ route: ["drafts"] }) });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { drafts: Array<{ slug: string; canMerge: boolean }> };
       expect(body.drafts).toHaveLength(1);
@@ -125,7 +125,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       fake.seedPullRequest({ head: "cimisy/ed-user/posts/mine", base: "main", title: "My draft", authorLogin: "ed-user" });
       fake.seedPullRequest({ head: "cimisy/ed-user-2/posts/theirs", base: "main", title: "Their draft", authorLogin: "ed-user-2" });
       const cookie = await sessionCookieFor("pub-user", "2");
-      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: Promise.resolve({ route: ["drafts"] }) });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { drafts: Array<{ slug: string; canMerge: boolean }> };
       expect(body.drafts).toHaveLength(2);
@@ -140,7 +140,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
         authorLogin: "ed-user",
       });
       const cookie = await sessionCookieFor("pub-user", "2");
-      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: Promise.resolve({ route: ["drafts"] }) });
       const body = (await res.json()) as { drafts: Array<{ kind: string; contentKey: string; slug: string; canMerge: boolean }> };
       expect(body.drafts).toHaveLength(1);
       expect(body.drafts[0]).toMatchObject({ kind: "singleton", contentKey: "settings", slug: "singleton", canMerge: true });
@@ -149,7 +149,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
     it("collection drafts carry kind 'collection' and their content key", async () => {
       fake.seedPullRequest({ head: "cimisy/ed-user/posts/mine", base: "main", title: "My draft", authorLogin: "ed-user" });
       const cookie = await sessionCookieFor("pub-user", "2");
-      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: Promise.resolve({ route: ["drafts"] }) });
       const body = (await res.json()) as { drafts: Array<{ kind: string; contentKey: string }> };
       expect(body.drafts[0]).toMatchObject({ kind: "collection", contentKey: "posts" });
     });
@@ -158,7 +158,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       fake.seedPullRequest({ head: "cimisy/malformed", base: "main", title: "Weird", authorLogin: "someone" });
       fake.seedPullRequest({ head: "cimisy/ed-user/posts/mine", base: "main", title: "My draft", authorLogin: "ed-user" });
       const cookie = await sessionCookieFor("pub-user", "2");
-      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: Promise.resolve({ route: ["drafts"] }) });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { drafts: unknown[] };
       expect(body.drafts).toHaveLength(1);
@@ -167,10 +167,10 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
     it("ignores a closed/merged PR", async () => {
       const { number } = fake.seedPullRequest({ head: "cimisy/ed-user/posts/mine", base: "main", title: "My draft", authorLogin: "ed-user" });
       await handler.POST(req("http://x/api/cimisy/drafts/" + number + "/merge", { method: "POST", headers: { cookie: await sessionCookieFor("admin-user", "1") } }), {
-        params: { route: ["drafts", String(number), "merge"] },
+        params: Promise.resolve({ route: ["drafts", String(number), "merge"] }),
       });
       const cookie = await sessionCookieFor("pub-user", "2");
-      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
+      const res = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: Promise.resolve({ route: ["drafts"] }) });
       const body = (await res.json()) as { drafts: unknown[] };
       expect(body.drafts).toHaveLength(0);
     });
@@ -179,7 +179,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
   describe("POST /drafts/:id/merge", () => {
     it("rejects unauthenticated requests with 401", async () => {
       const res = await handler.POST(req("http://x/api/cimisy/drafts/1/merge", { method: "POST" }), {
-        params: { route: ["drafts", "1", "merge"] },
+        params: Promise.resolve({ route: ["drafts", "1", "merge"] }),
       });
       expect(res.status).toBe(401);
     });
@@ -188,7 +188,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       const cookie = await sessionCookieFor("admin-user", "1");
       const res = await handler.POST(
         req("http://x/api/cimisy/drafts/1/merge", { method: "POST", headers: { cookie, origin: "http://evil.example" } }),
-        { params: { route: ["drafts", "1", "merge"] } },
+        { params: Promise.resolve({ route: ["drafts", "1", "merge"] }) },
       );
       expect(res.status).toBe(403);
     });
@@ -197,7 +197,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       const { number } = fake.seedPullRequest({ head: "cimisy/ed-user/posts/mine", base: "main", title: "My draft", authorLogin: "ed-user" });
       const cookie = await sessionCookieFor("ed-user", "3");
       const res = await handler.POST(req(`http://x/api/cimisy/drafts/${number}/merge`, { method: "POST", headers: { cookie } }), {
-        params: { route: ["drafts", String(number), "merge"] },
+        params: Promise.resolve({ route: ["drafts", String(number), "merge"] }),
       });
       expect(res.status).toBe(403);
     });
@@ -206,13 +206,13 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       const { number } = fake.seedPullRequest({ head: "cimisy/ed-user/posts/mine", base: "main", title: "My draft", authorLogin: "ed-user" });
       const cookie = await sessionCookieFor("pub-user", "2");
       const res = await handler.POST(req(`http://x/api/cimisy/drafts/${number}/merge`, { method: "POST", headers: { cookie } }), {
-        params: { route: ["drafts", String(number), "merge"] },
+        params: Promise.resolve({ route: ["drafts", String(number), "merge"] }),
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { ok: boolean };
       expect(body.ok).toBe(true);
 
-      const listRes = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: { route: ["drafts"] } });
+      const listRes = await handler.GET(req("http://x/api/cimisy/drafts", { headers: { cookie } }), { params: Promise.resolve({ route: ["drafts"] }) });
       const listBody = (await listRes.json()) as { drafts: unknown[] };
       expect(listBody.drafts).toHaveLength(0);
     });
@@ -227,13 +227,13 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       // The editor authored it but lacks publish → 403.
       const editorCookie = await sessionCookieFor("ed-user", "3");
       const denied = await handler.POST(req(`http://x/api/cimisy/drafts/${number}/merge`, { method: "POST", headers: { cookie: editorCookie } }), {
-        params: { route: ["drafts", String(number), "merge"] },
+        params: Promise.resolve({ route: ["drafts", String(number), "merge"] }),
       });
       expect(denied.status).toBe(403);
       // A publisher can merge it.
       const pubCookie = await sessionCookieFor("pub-user", "2");
       const merged = await handler.POST(req(`http://x/api/cimisy/drafts/${number}/merge`, { method: "POST", headers: { cookie: pubCookie } }), {
-        params: { route: ["drafts", String(number), "merge"] },
+        params: Promise.resolve({ route: ["drafts", String(number), "merge"] }),
       });
       expect(merged.status).toBe(200);
     });
@@ -241,7 +241,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
     it("returns 404 for an unknown draft id", async () => {
       const cookie = await sessionCookieFor("admin-user", "1");
       const res = await handler.POST(req("http://x/api/cimisy/drafts/99999/merge", { method: "POST", headers: { cookie } }), {
-        params: { route: ["drafts", "99999", "merge"] },
+        params: Promise.resolve({ route: ["drafts", "99999", "merge"] }),
       });
       expect(res.status).toBe(404);
     });
@@ -254,7 +254,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
         collections: buildConfig(fake).collections,
       });
       const localHandler = createCimisyHandler(localConfig);
-      const res = await localHandler.GET(req("http://x/api/cimisy/drafts"), { params: { route: ["drafts"] } });
+      const res = await localHandler.GET(req("http://x/api/cimisy/drafts"), { params: Promise.resolve({ route: ["drafts"] }) });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { drafts: unknown[] };
       expect(body.drafts).toEqual([]);
@@ -267,7 +267,7 @@ describe("drafts routes (/drafts, /drafts/:id/merge)", () => {
       });
       const localHandler = createCimisyHandler(localConfig);
       const res = await localHandler.POST(req("http://x/api/cimisy/drafts/1/merge", { method: "POST" }), {
-        params: { route: ["drafts", "1", "merge"] },
+        params: Promise.resolve({ route: ["drafts", "1", "merge"] }),
       });
       expect(res.status).toBe(404);
     });

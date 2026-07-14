@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function HomePage() {
   return (
     <main>
@@ -9,10 +11,10 @@ export default function HomePage() {
       </p>
       <p>Requires a GitHub App to be registered and installed first — see this app&apos;s README.</p>
       <p>
-        <a href="/admin">Open the admin panel &rarr;</a>
+        <Link href="/admin">Open the admin panel &rarr;</Link>
       </p>
       <p>
-        <a href="/blog">View the public blog &rarr;</a>
+        <Link href="/blog">View the public blog &rarr;</Link>
       </p>
     </main>
   );

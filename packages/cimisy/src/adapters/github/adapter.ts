@@ -49,6 +49,13 @@ export class GithubStorageAdapter implements StorageAdapter {
   readonly credentials: GithubAppCredentials;
 
   constructor(options: GithubSourceOptions) {
+    if (!options.sessionSecret || options.sessionSecret.length < 32) {
+      throw new CimisyError(
+        "sessionSecret must be at least 32 characters — it signs the session cookie, and a short secret is brute-forceable. " +
+          "Generate one with e.g. `openssl rand -base64 32`.",
+        "WEAK_SESSION_SECRET",
+      );
+    }
     const { owner, name } = parseRepo(options.repo);
     this.owner = owner;
     this.repoName = name;

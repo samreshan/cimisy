@@ -15,7 +15,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
   publicKeyEncoding: { type: "pkcs1", format: "pem" },
 });
 
-const SESSION_SECRET = "test-session-secret";
+const SESSION_SECRET = "test-session-secret-0123456789ab";
 
 /**
  * A full hierarchical config: a top-level collection, a top-level singleton,
@@ -126,7 +126,7 @@ describe("singleton routes (/singletons/*)", () => {
     seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "admin" }]);
     const cookie = await sessionCookieFor("alice", "1");
     const res = await handler.GET(req("http://x/api/cimisy/singletons/settings", { headers: { cookie } }), {
-      params: { route: ["singletons", "settings"] },
+      params: Promise.resolve({ route: ["singletons", "settings"] }),
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ singleton: null });
@@ -142,14 +142,14 @@ describe("singleton routes (/singletons/*)", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { siteName: "Acme" }, baseVersion: null }),
       }),
-      { params: { route: ["singletons", "settings"] } },
+      { params: Promise.resolve({ route: ["singletons", "settings"] }) },
     );
     expect(putRes.status).toBe(200);
     const putBody = (await putRes.json()) as { version: string; publish: { status: string } };
     expect(putBody.publish.status).toBe("direct");
 
     const getRes = await handler.GET(req("http://x/api/cimisy/singletons/settings", { headers: { cookie } }), {
-      params: { route: ["singletons", "settings"] },
+      params: Promise.resolve({ route: ["singletons", "settings"] }),
     });
     const getBody = (await getRes.json()) as { singleton: { values: Record<string, unknown>; version: string } };
     expect(getBody.singleton.values).toEqual({ siteName: "Acme" });
@@ -164,7 +164,7 @@ describe("singleton routes (/singletons/*)", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { siteName: "Stale" }, baseVersion: "not-the-current-version" }),
       }),
-      { params: { route: ["singletons", "settings"] } },
+      { params: Promise.resolve({ route: ["singletons", "settings"] }) },
     );
     expect(staleRes.status).toBe(409);
   });
@@ -179,7 +179,7 @@ describe("singleton routes (/singletons/*)", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { siteName: "Draft name" }, baseVersion: null }),
       }),
-      { params: { route: ["singletons", "settings"] } },
+      { params: Promise.resolve({ route: ["singletons", "settings"] }) },
     );
     expect(putRes.status).toBe(200);
     const body = (await putRes.json()) as { publish: { status: string; branch?: string } };
@@ -199,7 +199,7 @@ describe("singleton routes (/singletons/*)", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { heading: "Welcome" }, baseVersion: null }),
       }),
-      { params: { route: ["singletons", "home.hero"] } },
+      { params: Promise.resolve({ route: ["singletons", "home.hero"] }) },
     );
     expect(heroPut.status).toBe(200);
     expect(fake.filesOnBranch("main").get("content/pages/home/hero.yaml")).toContain("heading: Welcome");
@@ -210,7 +210,7 @@ describe("singleton routes (/singletons/*)", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { quote: "Great Product" }, baseVersion: null }),
       }),
-      { params: { route: ["collections", "home.testimonials"] } },
+      { params: Promise.resolve({ route: ["collections", "home.testimonials"] }) },
     );
     expect(entryPost.status).toBe(200);
     const entryBody = (await entryPost.json()) as { slug: string };
@@ -222,11 +222,11 @@ describe("singleton routes (/singletons/*)", () => {
     seedRoster(fake, [{ githubId: "1", githubLogin: "alice", role: "admin" }]);
     const cookie = await sessionCookieFor("alice", "1");
     const unknown = await handler.GET(req("http://x/api/cimisy/singletons/nope", { headers: { cookie } }), {
-      params: { route: ["singletons", "nope"] },
+      params: Promise.resolve({ route: ["singletons", "nope"] }),
     });
     expect(unknown.status).toBe(404);
     const malformed = await handler.GET(req("http://x/api/cimisy/singletons/..", { headers: { cookie } }), {
-      params: { route: ["singletons", ".."] },
+      params: Promise.resolve({ route: ["singletons", ".."] }),
     });
     expect(malformed.status).toBe(404);
   });
@@ -248,7 +248,7 @@ describe("singleton routes (/singletons/*)", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { heading: "Allowed" }, baseVersion: null }),
       }),
-      { params: { route: ["singletons", "home.hero"] } },
+      { params: Promise.resolve({ route: ["singletons", "home.hero"] }) },
     );
     expect(heroPut.status).toBe(200);
 
@@ -258,12 +258,12 @@ describe("singleton routes (/singletons/*)", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ values: { siteName: "Denied" }, baseVersion: null }),
       }),
-      { params: { route: ["singletons", "settings"] } },
+      { params: Promise.resolve({ route: ["singletons", "settings"] }) },
     );
     expect(settingsPut.status).toBe(403);
 
     const postsGet = await handler.GET(req("http://x/api/cimisy/collections/posts", { headers: { cookie } }), {
-      params: { route: ["collections", "posts"] },
+      params: Promise.resolve({ route: ["collections", "posts"] }),
     });
     expect(postsGet.status).toBe(403);
   });

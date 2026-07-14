@@ -18,7 +18,7 @@ function makeAdapter(fake: FakeGithubApi): GithubStorageAdapter {
     privateKey,
     clientId: "client-id",
     clientSecret: "client-secret",
-    sessionSecret: "session-secret",
+    sessionSecret: "session-secret-0123456789abcdef0",
   });
 }
 
@@ -253,6 +253,34 @@ describe("GithubStorageAdapter", () => {
     expect(drafts).toHaveLength(0);
   });
 
+  it("throws when sessionSecret is shorter than 32 characters", () => {
+    expect(
+      () =>
+        new GithubStorageAdapter({
+          repo: "acme/site",
+          appId: "12345",
+          privateKey,
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          sessionSecret: "too-short",
+        }),
+    ).toThrow(/32 characters/);
+  });
+
+  it("throws the same friendly error (not a raw TypeError) when sessionSecret is missing entirely — e.g. an unset env var passed through `!`", () => {
+    expect(
+      () =>
+        new GithubStorageAdapter({
+          repo: "acme/site",
+          appId: "12345",
+          privateKey,
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          sessionSecret: undefined as unknown as string,
+        }),
+    ).toThrow(/32 characters/);
+  });
+
   it("throws a descriptive error when the App isn't installed on the repo", async () => {
     const uninstalledAdapter = new GithubStorageAdapter({
       repo: "someone-else/other-repo",
@@ -260,7 +288,7 @@ describe("GithubStorageAdapter", () => {
       privateKey,
       clientId: "client-id",
       clientSecret: "client-secret",
-      sessionSecret: "session-secret",
+      sessionSecret: "session-secret-0123456789abcdef0",
     });
     await expect(uninstalledAdapter.read("posts/x.mdx")).rejects.toThrow(/installed/i);
   });

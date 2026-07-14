@@ -2,6 +2,7 @@ import { createReader } from "cimisy/next";
 import { renderBlocks, type BlockNodeLike } from "cimisy/render";
 import { draftMode } from "next/headers";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import cimisyConfig from "@/cimisy.config";
 
 const reader = createReader(cimisyConfig);
@@ -18,11 +19,15 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
     <main>
       {previewing && (
         <p style={{ background: "#fff3cd", padding: 8, borderRadius: 4 }}>
-          Previewing a draft — <a href="/api/cimisy/preview/disable?redirectTo=/blog">exit preview</a>
+          Previewing a draft —{" "}
+          {/* prefetch=false: this is a state-changing GET (disables draft mode), not a page — must not fire until clicked */}
+          <Link href="/api/cimisy/preview/disable?redirectTo=/blog" prefetch={false}>
+            exit preview
+          </Link>
         </p>
       )}
       <p>
-        <a href="/blog">&larr; All posts</a>
+        <Link href="/blog">&larr; All posts</Link>
       </p>
       <h1>{String(post.values.title)}</h1>
       {renderBlocks(body)}

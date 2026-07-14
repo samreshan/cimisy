@@ -16,7 +16,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
   publicKeyEncoding: { type: "pkcs1", format: "pem" },
 });
 
-const SESSION_SECRET = "test-session-secret";
+const SESSION_SECRET = "test-session-secret-0123456789ab";
 const PNG_BASE64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03]).toString("base64");
 
 function buildConfig(fake: FakeGithubApi): ResolvedCimisyConfig {
@@ -105,7 +105,7 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       expect(res.status).toBe(401);
     });
@@ -118,7 +118,7 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { cookie, "content-type": "application/json", origin: "http://evil.example" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       expect(res.status).toBe(403);
     });
@@ -131,7 +131,7 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "My Photo.png", content: PNG_BASE64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       expect(uploadRes.status).toBe(200);
       const body = (await uploadRes.json()) as { path: string; contentType: string; publish: { status: string } };
@@ -140,13 +140,32 @@ describe("media routes (/media, /media/raw)", () => {
       expect(body.publish.status).toBe("direct");
 
       const rawRes = await handler.GET(req(`http://x/api/cimisy/media/raw?path=${encodeURIComponent(body.path)}`, { headers: { cookie } }), {
-        params: { route: ["media", "raw"] },
+        params: Promise.resolve({ route: ["media", "raw"] }),
       });
       expect(rawRes.status).toBe(200);
       expect(rawRes.headers.get("content-type")).toBe("image/png");
       expect(rawRes.headers.get("x-content-type-options")).toBe("nosniff");
       const bytes = new Uint8Array(await rawRes.arrayBuffer());
       expect(Buffer.from(bytes).toString("base64")).toBe(PNG_BASE64);
+    });
+
+    it("rejects an upload targeting a content key that isn't declared in config with 404", async () => {
+      const cookie = await adminCookie();
+      const res = await handler.POST(
+        req("http://x/api/cimisy/media", {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({
+            targetKey: "does-not-exist",
+            slug: "hello",
+            directory: "content/uploads",
+            filename: "a.png",
+            content: PNG_BASE64,
+          }),
+        }),
+        { params: Promise.resolve({ route: ["media"] }) },
+      );
+      expect(res.status).toBe(404);
     });
 
     it("an editor's upload lands on their draft branch, not main (same envelope as an entry save)", async () => {
@@ -161,7 +180,7 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { path: string; publish: { status: string; branch?: string } };
@@ -180,7 +199,7 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       expect(res.status).toBe(403);
     });
@@ -193,7 +212,7 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: ".cimisy", filename: "a.png", content: PNG_BASE64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       expect(res.status).toBe(400);
     });
@@ -207,7 +226,7 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.svg", content: svgBase64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       expect(res.status).toBe(400);
     });
@@ -221,7 +240,7 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: hugeBase64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       expect(res.status).toBe(400);
     });
@@ -238,7 +257,7 @@ describe("media routes (/media, /media/raw)", () => {
             headers: { cookie, "content-type": "application/json" },
             body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
           }),
-          { params: { route: ["media"] } },
+          { params: Promise.resolve({ route: ["media"] }) },
         );
       const first = await uploadReq();
       expect(first.status).toBe(200);
@@ -256,10 +275,10 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { cookie, "content-type": "application/json" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       const res = await handler.GET(req("http://x/api/cimisy/media?directory=content/uploads", { headers: { cookie } }), {
-        params: { route: ["media"] },
+        params: Promise.resolve({ route: ["media"] }),
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { files: Array<{ path: string }> };
@@ -270,7 +289,7 @@ describe("media routes (/media, /media/raw)", () => {
     it("rejects listing a non-configured directory", async () => {
       const cookie = await adminCookie();
       const res = await handler.GET(req("http://x/api/cimisy/media?directory=.cimisy", { headers: { cookie } }), {
-        params: { route: ["media"] },
+        params: Promise.resolve({ route: ["media"] }),
       });
       expect(res.status).toBe(400);
     });
@@ -278,7 +297,7 @@ describe("media routes (/media, /media/raw)", () => {
     it("requires the directory query parameter", async () => {
       const cookie = await adminCookie();
       const res = await handler.GET(req("http://x/api/cimisy/media", { headers: { cookie } }), {
-        params: { route: ["media"] },
+        params: Promise.resolve({ route: ["media"] }),
       });
       expect(res.status).toBe(400);
     });
@@ -288,7 +307,7 @@ describe("media routes (/media, /media/raw)", () => {
     it("blocks reading a path outside every configured image directory (e.g. the RBAC roster file)", async () => {
       const cookie = await adminCookie();
       const res = await handler.GET(req("http://x/api/cimisy/media/raw?path=.cimisy/users.yaml", { headers: { cookie } }), {
-        params: { route: ["media", "raw"] },
+        params: Promise.resolve({ route: ["media", "raw"] }),
       });
       expect(res.status).toBe(400);
     });
@@ -296,7 +315,7 @@ describe("media routes (/media, /media/raw)", () => {
     it("returns 404 for a path that doesn't exist", async () => {
       const cookie = await adminCookie();
       const res = await handler.GET(req("http://x/api/cimisy/media/raw?path=content/uploads/missing.png", { headers: { cookie } }), {
-        params: { route: ["media", "raw"] },
+        params: Promise.resolve({ route: ["media", "raw"] }),
       });
       expect(res.status).toBe(404);
     });
@@ -305,7 +324,7 @@ describe("media routes (/media, /media/raw)", () => {
       const cookie = await adminCookie();
       const res = await handler.GET(
         req("http://x/api/cimisy/media/raw?path=content/uploads/a.png&ref=some-random-branch", { headers: { cookie } }),
-        { params: { route: ["media", "raw"] } },
+        { params: Promise.resolve({ route: ["media", "raw"] }) },
       );
       expect(res.status).toBe(400);
     });
@@ -322,7 +341,7 @@ describe("media routes (/media, /media/raw)", () => {
           headers: { cookie: editorCookie, "content-type": "application/json" },
           body: JSON.stringify({ targetKey: "posts", slug: "hello", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
         }),
-        { params: { route: ["media"] } },
+        { params: Promise.resolve({ route: ["media"] }) },
       );
       const { path, publish } = (await uploadRes.json()) as { path: string; publish: { branch: string } };
 
@@ -330,7 +349,7 @@ describe("media routes (/media, /media/raw)", () => {
         req(`http://x/api/cimisy/media/raw?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(publish.branch)}`, {
           headers: { cookie: editorCookie },
         }),
-        { params: { route: ["media", "raw"] } },
+        { params: Promise.resolve({ route: ["media", "raw"] }) },
       );
       expect(rawRes.status).toBe(200);
       const bytes = new Uint8Array(await rawRes.arrayBuffer());
@@ -339,7 +358,7 @@ describe("media routes (/media, /media/raw)", () => {
 
     it("rejects unauthenticated requests with 401", async () => {
       const res = await handler.GET(req("http://x/api/cimisy/media/raw?path=content/uploads/a.png"), {
-        params: { route: ["media", "raw"] },
+        params: Promise.resolve({ route: ["media", "raw"] }),
       });
       expect(res.status).toBe(401);
     });

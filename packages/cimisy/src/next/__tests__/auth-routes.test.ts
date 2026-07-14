@@ -5,8 +5,9 @@ import { githubSource } from "../../adapters/github/adapter.js";
 import { createFakeGithubApi, type FakeGithubApi } from "../../adapters/github/__tests__/fake-github-api.js";
 import { DEFAULT_ROLE_MAPPING } from "../../config/define-config.js";
 import { readUserRoster } from "../../rbac/user-store.js";
+import { createInMemoryRateLimiter } from "../../security/rate-limit.js";
 import type { GithubIntegratedSource } from "../../shared/github-source-shape.js";
-import { handleCallback } from "../auth-routes.js";
+import { handleCallback, handleLogin } from "../auth-routes.js";
 import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from "../session.js";
 
 const { privateKey } = generateKeyPairSync("rsa", {
@@ -23,7 +24,7 @@ function makeSource(fake: FakeGithubApi): GithubIntegratedSource {
     privateKey,
     clientId: "client-id",
     clientSecret: "client-secret",
-    sessionSecret: "session-secret",
+    sessionSecret: "session-secret-0123456789abcdef0",
   });
 }
 
@@ -114,5 +115,38 @@ describe("auth-routes handleCallback", () => {
 
     const { users } = await readUserRoster(source, { bypassCache: true });
     expect(users).toEqual([]); // no roster entry was ever created
+  });
+});
+
+describe("auth-routes handleLogin", () => {
+  let fake: FakeGithubApi;
+  let source: GithubIntegratedSource;
+
+  beforeEach(() => {
+    fake = createFakeGithubApi({ owner: "acme", repo: "site", initialFiles: {} });
+    fake.install();
+    source = makeSource(fake);
+  });
+
+  afterEach(() => {
+    fake.restore();
+  });
+
+  function loginRequest(): NextRequest {
+    return new NextRequest(new URL("http://x/api/cimisy/auth/login"));
+  }
+
+  it("redirects to GitHub's authorize URL when no rate limiter is configured", async () => {
+    const res = await handleLogin(loginRequest(), source);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("github.com/login/oauth/authorize");
+  });
+
+  it("is rate-limited the same way the callback is, keyed by IP", async () => {
+    const rateLimiter = createInMemoryRateLimiter({ limit: 1, windowMs: 60_000 });
+    const first = await handleLogin(loginRequest(), source, rateLimiter);
+    expect(first.status).toBe(307);
+    const second = await handleLogin(loginRequest(), source, rateLimiter);
+    expect(second.status).toBe(429);
   });
 });
