@@ -6,6 +6,19 @@ type Theme = "light" | "dark";
 
 const STORAGE_KEY = "cimisy-theme";
 
+const INLINE_SCRIPT_CHAR_MAP: Record<string, string> = {
+  "<": "\\u003C",
+  ">": "\\u003E",
+  "/": "\\u002F",
+  "\\": "\\\\",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+};
+
+function escapeForInlineScript(str: string): string {
+  return str.replace(/[<>\/\\\u2028\u2029]/g, (ch) => INLINE_SCRIPT_CHAR_MAP[ch] ?? ch);
+}
+
 /**
  * Runs as an inline <script>, the first child inside .cimisy-root (see
  * app.tsx), so it executes synchronously while the browser is still
@@ -16,7 +29,7 @@ const STORAGE_KEY = "cimisy-theme";
  * Reading localStorage directly here (rather than waiting for React)
  * means a stored preference wins on the very first paint, not the second.
  */
-export const THEME_BOOTSTRAP_SCRIPT = `(function(){try{var s=localStorage.getItem(${JSON.stringify(STORAGE_KEY)});var t=(s==="light"||s==="dark")?s:(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.currentScript.parentElement.setAttribute("data-theme",t);}catch(e){}})();`;
+export const THEME_BOOTSTRAP_SCRIPT = `(function(){try{var s=localStorage.getItem(${escapeForInlineScript(JSON.stringify(STORAGE_KEY))});var t=(s==="light"||s==="dark")?s:(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.currentScript.parentElement.setAttribute("data-theme",t);}catch(e){}})();`;
 
 function rootEl(): HTMLElement | null {
   return document.querySelector(".cimisy-root");
