@@ -27,19 +27,38 @@ function TreeNode({ node, basePath }: { node: ManifestTreeNode; basePath: string
   if (node.kind !== "page") {
     return <EntityCard entity={node} basePath={basePath} />;
   }
+  const staticChildren = node.children.filter((child) => child.kind !== "collection");
+  const collectionChildren = node.children.filter((child) => child.kind === "collection");
   return (
     <div className="cimisy-page-group">
       <div className="cimisy-page-group-header">
         <span className="cimisy-page-group-label">{node.label}</span>
         {node.route && <code className="cimisy-muted">{node.route}</code>}
       </div>
-      <ul className="cimisy-list cimisy-page-group-children">
-        {node.children.map((child) => (
-          <li key={child.key}>
-            <EntityCard entity={child} basePath={basePath} />
-          </li>
-        ))}
-      </ul>
+      {staticChildren.length > 0 && (
+        <div className="cimisy-page-group-section">
+          <span className="cimisy-page-group-section-label">Static content</span>
+          <ul className="cimisy-list cimisy-page-group-children">
+            {staticChildren.map((child) => (
+              <li key={child.key}>
+                <EntityCard entity={child} basePath={basePath} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {collectionChildren.length > 0 && (
+        <div className="cimisy-page-group-section">
+          <span className="cimisy-page-group-section-label">Collections</span>
+          <ul className="cimisy-list cimisy-page-group-children">
+            {collectionChildren.map((child) => (
+              <li key={child.key}>
+                <EntityCard entity={child} basePath={basePath} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -49,7 +68,7 @@ function EntityCard({ entity, basePath }: { entity: EntityManifest; basePath: st
     <a className="cimisy-card" href={`${basePath}/${entity.key}`}>
       {entity.label}
       <span className="cimisy-badge" style={{ marginLeft: 8 }}>
-        {entity.kind === "collection" ? "collection" : "content"}
+        {entity.kind === "collection" ? "collection" : "static"}
       </span>
     </a>
   );

@@ -192,6 +192,11 @@ function extensionForFormat(format: "yaml" | "mdx"): string {
   return format === "yaml" ? ".yaml" : ".mdx";
 }
 
+/** A section's on-disk path is derived, never declared — shared here so scan's apply-time codemod (which writes the file directly, ahead of/independent from a config() normalization pass) can never drift from what the runtime normalizer computes for the same page/section/format. */
+export function computeSectionPath(pagePath: string, sectionKey: string, format: "yaml" | "mdx"): string {
+  return `${pagePath}/${sectionKey}${extensionForFormat(format)}`;
+}
+
 interface NormalizationState {
   collectionsByKey: Record<string, NormalizedCollection>;
   singletonsByKey: Record<string, NormalizedSingleton>;
@@ -306,7 +311,7 @@ function normalizeSection(
   claimKey(state, key, context);
   const format = deriveSingletonFormat(def.schema, def.format, context);
   const sectionKey = key.split(".").pop()!;
-  const path = `${pagePath}/${sectionKey}${extensionForFormat(format)}`;
+  const path = computeSectionPath(pagePath, sectionKey, format);
   claimPath(state, path, key);
   const normalized: NormalizedSingleton = {
     key,

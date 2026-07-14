@@ -6,7 +6,8 @@ import path from "node:path";
 import ts from "typescript";
 import { humanizeLabel } from "../codegen/insert-collection-config.js";
 import { applyCandidate } from "../scan/apply.js";
-import { defaultReportPath, loadScanReport, printScanReport, runScan, saveScanReport } from "../scan/report.js";
+import { applyStaticCandidate } from "../scan/apply-static-content.js";
+import { defaultReportPath, loadScanReport, printScanReport, runScan, saveScanReport, type StaticContentCandidateReport } from "../scan/report.js";
 
 async function pathExists(candidate: string): Promise<boolean> {
   try {
@@ -44,10 +45,11 @@ async function readPathAliases(projectRoot: string): Promise<Record<string, stri
   return aliases;
 }
 
-async function runScanCommand(projectRoot: string): Promise<void> {
+async function runScanCommand(projectRoot: string, args: string[]): Promise<void> {
+  const full = args.includes("--full");
   const appDir = await findAppDir(projectRoot);
   const pathAliases = await readPathAliases(projectRoot);
-  const report = await runScan({ appDir, projectRoot, pathAliases });
+  const report = await runScan({ appDir, projectRoot, pathAliases, full });
 
   console.log(printScanReport(report));
 
@@ -90,8 +92,9 @@ async function runImportCommand(projectRoot: string, args: string[]): Promise<vo
     return;
   }
   const report = await loadScanReport(cachePath);
-  if (report.collectionCandidates.length === 0) {
-    console.log("No collection candidates in the last scan report. Nothing to import.");
+  const staticCandidates: StaticContentCandidateReport[] = report.staticContentCandidates ?? [];
+  if (report.collectionCandidates.length === 0 && staticCandidates.length === 0) {
+    console.log("No candidates in the last scan report. Nothing to import.");
     return;
   }
 
@@ -110,13 +113,33 @@ async function runImportCommand(projectRoot: string, args: string[]): Promise<vo
 
   clack.intro("cimisy import");
 
-  const selected = await clack.multiselect({
+  // Encoded as a plain string ("collection:3" / "static:1") rather than a tagged
+  // object, because @clack/prompts' Option<Value> type is a distributive
+  // conditional over Value — passing a union-of-objects Value makes TypeScript
+  // check the options array against a distributed union of narrower shapes,
+  // which a single combined array can never satisfy. A Primitive Value sidesteps
+  // that entirely.
+  const collectionOptions = report.collectionCandidates.map((c, i) => ({
+    value: `collection:${i}`,
+    label: `[collection] ${c.variableName} (${c.itemCount} items) — ${path.relative(report.appDir, c.sourceFile)}`,
+    hint: c.usedOnRoutes.slice(0, 3).join(", "),
+  }));
+  const staticOptions = [...staticCandidates]
+    .sort((a, b) => a.proposedKey.localeCompare(b.proposedKey))
+    .map((c) => {
+      const index = staticCandidates.indexOf(c);
+      const scopeLabel = c.scope === "top-level-singleton" ? "singleton" : "section";
+      const fieldCount = c.fields.length;
+      return {
+        value: `static:${index}`,
+        label: `[${scopeLabel}] ${c.proposedKey} (${fieldCount} field${fieldCount === 1 ? "" : "s"}) — ${path.relative(report.appDir, c.sourceFile)}`,
+        hint: c.usedOnRoutes.slice(0, 3).join(", "),
+      };
+    });
+
+  const selected = await clack.multiselect<string>({
     message: "Select candidates to bring under cimisy's management:",
-    options: report.collectionCandidates.map((c, i) => ({
-      value: i,
-      label: `${c.variableName} (${c.itemCount} items) — ${path.relative(report.appDir, c.sourceFile)}`,
-      hint: c.usedOnRoutes.slice(0, 3).join(", "),
-    })),
+    options: [...collectionOptions, ...staticOptions],
     required: false,
   });
 
@@ -129,29 +152,46 @@ async function runImportCommand(projectRoot: string, args: string[]): Promise<vo
   clack.log.info(`Created branch ${branch}`);
 
   const configFilePath = path.join(projectRoot, "cimisy.config.ts");
-  for (const index of selected) {
-    const candidate = report.collectionCandidates[index]!;
-    const collectionName = candidate.variableName;
-    const spin = clack.spinner();
-    spin.start(`Importing ${collectionName}...`);
-    try {
-      const result = await applyCandidate({
-        candidate,
-        configFilePath,
-        collectionName,
-        collectionLabel: humanizeLabel(collectionName),
-        contentPath: `${collectionName}/*.mdx`,
-      });
-      const failed = result.items.filter((i) => i.error);
-      spin.stop(
-        `${collectionName}: ${result.items.length - failed.length}/${result.items.length} items imported` +
-          (failed.length > 0 ? `, ${failed.length} failed` : ""),
-      );
-      for (const failure of failed) {
-        clack.log.warn(`  item ${failure.index}: ${failure.error}`);
+  for (const choice of selected) {
+    const [kind, indexText] = choice.split(":");
+    const index = Number(indexText);
+    if (kind === "collection") {
+      const candidate = report.collectionCandidates[index]!;
+      const collectionName = candidate.variableName;
+      const spin = clack.spinner();
+      spin.start(`Importing ${collectionName}...`);
+      try {
+        const result = await applyCandidate({
+          candidate,
+          configFilePath,
+          collectionName,
+          collectionLabel: humanizeLabel(collectionName),
+          contentPath: `${collectionName}/*.mdx`,
+        });
+        const failed = result.items.filter((i) => i.error);
+        spin.stop(
+          `${collectionName}: ${result.items.length - failed.length}/${result.items.length} items imported` +
+            (failed.length > 0 ? `, ${failed.length} failed` : ""),
+        );
+        for (const failure of failed) {
+          clack.log.warn(`  item ${failure.index}: ${failure.error}`);
+        }
+      } catch (err) {
+        spin.stop(`${collectionName}: failed`);
+        clack.log.error(err instanceof Error ? err.message : String(err));
       }
+      continue;
+    }
+
+    const candidate = staticCandidates[index]!;
+    const spin = clack.spinner();
+    spin.start(`Importing ${candidate.proposedKey}...`);
+    try {
+      const result = await applyStaticCandidate({ candidate, configFilePath });
+      spin.stop(result.error ? `${candidate.proposedKey}: failed` : `${candidate.proposedKey}: imported`);
+      if (result.error) clack.log.warn(`  ${result.error}`);
     } catch (err) {
-      spin.stop(`${collectionName}: failed`);
+      spin.stop(`${candidate.proposedKey}: failed`);
       clack.log.error(err instanceof Error ? err.message : String(err));
     }
   }
@@ -166,6 +206,7 @@ function printUsage(): void {
       "",
       "Commands:",
       "  scan     Scan the app for repetitive hardcoded content and report collection candidates",
+      "           --full  also scan for static content (headings/paragraphs/images/links) and propose sections/singletons",
       "  import   Interactively select scanned candidates and import them into cimisy",
       "           --allow-dirty  skip the clean-git-working-tree check",
       "",
@@ -179,7 +220,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case "scan":
-      await runScanCommand(projectRoot);
+      await runScanCommand(projectRoot, rest);
       return;
     case "import":
       await runImportCommand(projectRoot, rest);

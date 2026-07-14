@@ -1,7 +1,18 @@
-import path from "node:path";
 import ts from "typescript";
 import type { FieldProposal, ProposedFieldKind } from "../scan/infer-schema.js";
 import { ensureNamedImport } from "./insert-collection-config.js";
+import {
+  applyEdits,
+  buildAsyncEdit,
+  ensureDefaultImport,
+  expandToFullLines,
+  findEnclosingFunction,
+  findNodeAtPosition,
+  lineIndentBefore,
+  toImportSpecifier,
+  type FunctionLike,
+  type TextEdit,
+} from "./source-edit-utils.js";
 
 export interface RewriteArraySourceOptions {
   sourceText: string;
@@ -18,115 +29,6 @@ export interface RewriteArraySourceOptions {
   declarationEnd: number;
   /** Char offset of the `X.map(` call — see analyze-source.ts's RepeatingContentCandidate for why this, not declarationStart, locates the function to rewrite. */
   mapCallStart: number;
-}
-
-interface TextEdit {
-  start: number;
-  end: number;
-  text: string;
-}
-
-/** Applies non-overlapping edits right-to-left so earlier offsets stay valid as later ones are spliced in. */
-function applyEdits(source: string, edits: TextEdit[]): string {
-  let result = source;
-  for (const edit of [...edits].sort((a, b) => b.start - a.start)) {
-    result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
-  }
-  return result;
-}
-
-function lineIndentBefore(text: string, pos: number): string {
-  const lineStart = text.lastIndexOf("\n", pos - 1) + 1;
-  const prefix = text.slice(lineStart, pos);
-  return /^\s*$/.test(prefix) ? prefix : "";
-}
-
-/** Expands [start, end) to cover the whole source line(s), including one trailing newline, so deleting a statement doesn't leave a blank line behind. */
-function expandToFullLines(text: string, start: number, end: number): { start: number; end: number } {
-  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
-  const canExpandStart = /^\s*$/.test(text.slice(lineStart, start));
-  const newStart = canExpandStart ? lineStart : start;
-
-  let newEnd = end;
-  if (text[newEnd] === "\n") newEnd += 1;
-  else if (text[newEnd] === "\r" && text[newEnd + 1] === "\n") newEnd += 2;
-
-  return { start: newStart, end: newEnd };
-}
-
-function toImportSpecifier(fromFile: string, configFilePath: string): string {
-  const relDir = path.relative(path.dirname(fromFile), path.dirname(configFilePath));
-  const base = path.basename(configFilePath).replace(/\.tsx?$/, "");
-  const joined = [relDir, base].filter(Boolean).join("/").split(path.sep).join("/");
-  return joined.startsWith(".") ? joined : `./${joined}`;
-}
-
-function ensureDefaultImport(sourceText: string, moduleSpecifier: string, localName: string): string {
-  const source = ts.createSourceFile("x.tsx", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  for (const statement of source.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    if (statement.moduleSpecifier.text !== moduleSpecifier) continue;
-    if (statement.importClause?.name?.text === localName) return sourceText;
-  }
-  const lastImport = [...source.statements].filter(ts.isImportDeclaration).pop();
-  const newLine = `import ${localName} from ${JSON.stringify(moduleSpecifier)};`;
-  if (lastImport) {
-    const insertPos = lastImport.getEnd();
-    return sourceText.slice(0, insertPos) + `\n${newLine}` + sourceText.slice(insertPos);
-  }
-  return `${newLine}\n${sourceText}`;
-}
-
-function findNodeAtPosition(source: ts.SourceFile, pos: number): ts.Node {
-  let result: ts.Node = source;
-  const visit = (node: ts.Node): void => {
-    if (pos >= node.getStart(source) && pos < node.getEnd()) {
-      result = node;
-      ts.forEachChild(node, visit);
-    }
-  };
-  visit(source);
-  return result;
-}
-
-type FunctionLike = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction | ts.MethodDeclaration;
-
-function findEnclosingFunction(node: ts.Node): FunctionLike | null {
-  let current: ts.Node | undefined = node;
-  while (current) {
-    if (
-      ts.isFunctionDeclaration(current) ||
-      ts.isFunctionExpression(current) ||
-      ts.isArrowFunction(current) ||
-      ts.isMethodDeclaration(current)
-    ) {
-      return current;
-    }
-    current = current.parent;
-  }
-  return null;
-}
-
-function isAsyncFunction(fn: FunctionLike): boolean {
-  return ts.canHaveModifiers(fn) ? (ts.getModifiers(fn)?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) ?? false) : false;
-}
-
-function buildAsyncEdit(fn: FunctionLike, source: ts.SourceFile): TextEdit | null {
-  if (isAsyncFunction(fn)) return null;
-  if (ts.isArrowFunction(fn)) {
-    const pos = fn.getStart(source);
-    return { start: pos, end: pos, text: "async " };
-  }
-  if (ts.isMethodDeclaration(fn)) {
-    const pos = fn.name.getStart(source);
-    return { start: pos, end: pos, text: "async " };
-  }
-  const functionKeyword = fn.getChildren(source).find((c) => c.kind === ts.SyntaxKind.FunctionKeyword);
-  if (!functionKeyword) {
-    throw new Error("Could not locate the `function` keyword to insert `async` before.");
-  }
-  const pos = functionKeyword.getStart(source);
-  return { start: pos, end: pos, text: "async " };
 }
 
 function tsTypeForField(kind: ProposedFieldKind): string {

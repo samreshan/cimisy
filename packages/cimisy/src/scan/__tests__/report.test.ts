@@ -121,6 +121,68 @@ describe("runScan", () => {
   });
 });
 
+describe("runScan — static content (--full)", () => {
+  let root: string;
+  let appDir: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "cimisy-report-full-"));
+    appDir = path.join(root, "src", "app");
+    await mkdir(appDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("does not analyze static content by default (full: false)", async () => {
+    await writeFile(
+      path.join(appDir, "page.tsx"),
+      `export default function Home() { return <section id="hero"><h1>Welcome</h1></section>; }`,
+    );
+    const report = await runScan({ appDir, projectRoot: root });
+    expect(report.staticContentCandidates).toEqual([]);
+    expect(report.staticUnanalyzable).toEqual([]);
+  });
+
+  it("proposes a page-scoped section for static content declared directly on one route", async () => {
+    await mkdir(path.join(appDir, "about"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "about", "page.tsx"),
+      `export default function About() { return <section id="hero"><h1>About us</h1></section>; }`,
+    );
+    const report = await runScan({ appDir, projectRoot: root, full: true });
+    expect(report.staticContentCandidates).toHaveLength(1);
+    const candidate = report.staticContentCandidates![0]!;
+    expect(candidate.scope).toBe("page-section");
+    expect(candidate.proposedKey).toBe("about.hero");
+    expect(candidate.pageKey).toBe("about");
+    expect(candidate.pageRoute).toBe("/about");
+    expect(candidate.usedOnRoutes).toEqual(["/about"]);
+  });
+
+  it("proposes a top-level singleton for static content in a component shared across routes", async () => {
+    await mkdir(path.join(root, "src", "components"), { recursive: true });
+    await writeFile(
+      path.join(root, "src", "components", "Footer.tsx"),
+      `export function Footer() { return <footer id="footer"><span>All rights reserved</span></footer>; }`,
+    );
+    for (const route of ["about", "contact"]) {
+      await mkdir(path.join(appDir, route), { recursive: true });
+      await writeFile(
+        path.join(appDir, route, "page.tsx"),
+        `import { Footer } from "@/components/Footer"; export default function P() { return <Footer />; }`,
+      );
+    }
+    const report = await runScan({ appDir, projectRoot: root, pathAliases: { "@/*": "./src/*" }, full: true });
+    expect(report.staticContentCandidates).toHaveLength(1);
+    const candidate = report.staticContentCandidates![0]!;
+    expect(candidate.scope).toBe("top-level-singleton");
+    expect(candidate.proposedKey).toBe("footer");
+    expect(candidate.usedOnRoutes.sort()).toEqual(["/about", "/contact"]);
+  });
+});
+
 describe("printScanReport", () => {
   it("prints a readable report including field kinds and route usage", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "cimisy-print-"));

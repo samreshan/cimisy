@@ -121,6 +121,43 @@ function findCollectionsObjectLiteral(source: ts.SourceFile): ts.ObjectLiteralEx
 }
 
 /**
+ * Splices a new property into an existing object literal, preserving the
+ * rest of the file untouched — matches the indentation of the last sibling
+ * property when one exists, or derives one level deeper than the object's
+ * own opening line when it's empty. Shared by every "insert a new
+ * collection/singleton/section/page into cimisy.config.ts" codemod so the
+ * whitespace-matching logic lives in exactly one place.
+ */
+export function insertObjectLiteralProperty(
+  sourceText: string,
+  source: ts.SourceFile,
+  obj: ts.ObjectLiteralExpression,
+  buildPropertyText: (indent: string) => string,
+): string {
+  const closeBraceIndex = obj.getEnd() - 1;
+
+  if (obj.properties.length === 0) {
+    // No sibling property to copy indentation from — derive one level deeper than the object's own opening line.
+    const objStartLine = sourceText.slice(0, obj.getStart(source)).split("\n").pop() ?? "";
+    const objLineIndent = /^\s*/.exec(objStartLine)?.[0] ?? "";
+    const baseIndent = `${objLineIndent}  `;
+    const newPropertyText = buildPropertyText(baseIndent);
+    const openBraceIndex = obj.getStart(source) + 1;
+    return sourceText.slice(0, openBraceIndex) + `\n${newPropertyText}\n${objLineIndent}` + sourceText.slice(closeBraceIndex);
+  }
+
+  const lastProp = obj.properties[obj.properties.length - 1]!;
+  // Match the indentation of the existing last property for the new property line, but the closing
+  // brace itself sits one level shallower, aligned with the object's own opening line — they're not the same.
+  const lastPropLine = sourceText.slice(0, lastProp.getStart(source)).split("\n").pop() ?? "";
+  const propertyIndent = /^\s*/.exec(lastPropLine)?.[0] ?? "";
+  const objStartLine = sourceText.slice(0, obj.getStart(source)).split("\n").pop() ?? "";
+  const closingIndent = /^\s*/.exec(objStartLine)?.[0] ?? "";
+  const newPropertyText = buildPropertyText(propertyIndent);
+  return sourceText.slice(0, lastProp.getEnd()) + `,\n${newPropertyText}\n${closingIndent}` + sourceText.slice(closeBraceIndex);
+}
+
+/**
  * Inserts a new `<name>: collection({...})` entry into an existing
  * cimisy.config.ts's `collections: {...}` object, preserving the rest of
  * the file untouched (text splice at the object literal's boundary, never
@@ -144,27 +181,7 @@ export function insertCollectionIntoConfig(sourceText: string, options: InsertCo
     throw new Error(`cimisy.config.ts already has a collection named "${options.name}".`);
   }
 
-  const closeBraceIndex = collectionsObj.getEnd() - 1;
-
-  if (collectionsObj.properties.length === 0) {
-    // No sibling property to copy indentation from — derive one level deeper than the `collections: {` line itself.
-    const objStartLine = withImports.slice(0, collectionsObj.getStart(source)).split("\n").pop() ?? "";
-    const objLineIndent = /^\s*/.exec(objStartLine)?.[0] ?? "";
-    const baseIndent = `${objLineIndent}  `;
-    const newPropertyText = buildCollectionSourceText(options, baseIndent);
-    const openBraceIndex = collectionsObj.getStart(source) + 1;
-    return withImports.slice(0, openBraceIndex) + `\n${newPropertyText}\n${objLineIndent}` + withImports.slice(closeBraceIndex);
-  }
-
-  const lastProp = collectionsObj.properties[collectionsObj.properties.length - 1]!;
-  // Match the indentation of the existing last property for the new property line, but the closing
-  // brace itself sits one level shallower, aligned with the `collections: {` line — they're not the same.
-  const lastPropLine = withImports.slice(0, lastProp.getStart(source)).split("\n").pop() ?? "";
-  const propertyIndent = /^\s*/.exec(lastPropLine)?.[0] ?? "";
-  const objStartLine = withImports.slice(0, collectionsObj.getStart(source)).split("\n").pop() ?? "";
-  const closingIndent = /^\s*/.exec(objStartLine)?.[0] ?? "";
-  const newPropertyText = buildCollectionSourceText(options, propertyIndent);
-  return withImports.slice(0, lastProp.getEnd()) + `,\n${newPropertyText}\n${closingIndent}` + withImports.slice(closeBraceIndex);
+  return insertObjectLiteralProperty(withImports, source, collectionsObj, (indent) => buildCollectionSourceText(options, indent));
 }
 
 /** A fresh cimisy.config.ts matching the README quickstart shape, with an empty collections object ready for insertCollectionIntoConfig. */

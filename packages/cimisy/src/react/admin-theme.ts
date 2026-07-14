@@ -834,6 +834,18 @@ a.cimisy-card:hover {
 .cimisy-page-group-children {
   margin-left: 12px;
 }
+.cimisy-page-group-section + .cimisy-page-group-section {
+  margin-top: 12px;
+}
+.cimisy-page-group-section-label {
+  display: block;
+  font-size: 0.72em;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--cimisy-text-faint);
+  margin-bottom: 6px;
+}
 /* Collapsed SEO panel (fields.seo). */
 .cimisy-seo-panel {
   border: 1px solid var(--cimisy-border);
