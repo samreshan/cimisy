@@ -47,12 +47,17 @@ describe("buildAdminManifest — hierarchy projection", () => {
   it("projects the content tree with a flat byKey lookup covering every entity", () => {
     const manifest = buildAdminManifest(buildMixedConfig());
 
+    // "posts" has previewPath "/blog/:slug" and no declared page() for "/blog",
+    // so it's pulled into a synthetic "__route:/blog" group — see the
+    // "route grouping" describe block below for dedicated coverage.
     expect(manifest.tree.map((n) => ({ kind: n.kind, key: n.key }))).toEqual([
-      { kind: "collection", key: "posts" },
+      { kind: "page", key: "__route:/blog" },
       { kind: "singleton", key: "settings" },
       { kind: "page", key: "home" },
     ]);
-    const pageNode = manifest.tree.find((n) => n.kind === "page");
+    const blogGroup = manifest.tree.find((n) => n.key === "__route:/blog");
+    expect(blogGroup && "children" in blogGroup ? blogGroup.children.map((c) => c.key) : []).toEqual(["posts"]);
+    const pageNode = manifest.tree.find((n) => n.key === "home");
     expect(pageNode && "children" in pageNode ? pageNode.children.map((c) => c.key) : []).toEqual([
       "home.hero",
       "home.testimonials",
@@ -77,5 +82,190 @@ describe("buildAdminManifest — hierarchy projection", () => {
     const manifest = buildAdminManifest(buildMixedConfig());
     const roundTripped: unknown = JSON.parse(JSON.stringify(manifest));
     expect(roundTripped).toEqual(manifest);
+    // buildMixedConfig's "posts" previewPath triggers a synthetic route
+    // group (see "route grouping" below) — confirms that shape round-trips too.
+    expect(manifest.tree.some((n) => n.key === "__route:/blog")).toBe(true);
+  });
+});
+
+function localSourceForTest() {
+  return new LocalStorageAdapter({ rootDir: "/tmp/cimisy-manifest-test", allowInProduction: true });
+}
+
+describe("buildAdminManifest — route grouping", () => {
+  it("groups a top-level collection with a previewPath into a synthetic route group", () => {
+    const manifest = buildAdminManifest(
+      config({
+        source: localSourceForTest(),
+        collections: {
+          posts: collection({
+            label: "Posts",
+            path: "content/posts/*.mdx",
+            slugField: "slug",
+            previewPath: "/blog/:slug",
+            schema: { title: fields.text({ label: "Title" }), slug: fields.slug({ source: "title" }) },
+          }),
+        },
+      }),
+    );
+
+    expect(manifest.tree).toEqual([
+      { kind: "page", key: "__route:/blog", label: "Blog", route: "/blog", children: [manifest.byKey["posts"]] },
+    ]);
+  });
+
+  it("groups a top-level singleton with a previewPath into a synthetic route group", () => {
+    const manifest = buildAdminManifest(
+      config({
+        source: localSourceForTest(),
+        singletons: {
+          about: singleton({
+            label: "About",
+            path: "content/about.yaml",
+            previewPath: "/about",
+            schema: { body: fields.text({ label: "Body" }) },
+          }),
+        },
+      }),
+    );
+
+    expect(manifest.tree).toEqual([
+      { kind: "page", key: "__route:/about", label: "About", route: "/about", children: [manifest.byKey["about"]] },
+    ]);
+  });
+
+  it("merges multiple top-level items that share one derived route into a single group", () => {
+    const manifest = buildAdminManifest(
+      config({
+        source: localSourceForTest(),
+        collections: {
+          posts: collection({
+            label: "Posts",
+            path: "content/posts/*.mdx",
+            slugField: "slug",
+            previewPath: "/blog/:slug",
+            schema: { title: fields.text({ label: "Title" }), slug: fields.slug({ source: "title" }) },
+          }),
+        },
+        singletons: {
+          "blog-settings": singleton({
+            label: "Blog settings",
+            path: "content/blog-settings.yaml",
+            previewPath: "/blog",
+            schema: { tagline: fields.text({ label: "Tagline" }) },
+          }),
+        },
+      }),
+    );
+
+    expect(manifest.tree).toHaveLength(1);
+    const group = manifest.tree[0]!;
+    expect(group.kind).toBe("page");
+    expect("route" in group ? group.route : undefined).toBe("/blog");
+    expect("children" in group ? group.children.map((c) => c.key) : []).toEqual(["posts", "blog-settings"]);
+  });
+
+  it("merges a top-level item into a declared page() group sharing its route, instead of duplicating", () => {
+    const manifest = buildAdminManifest(
+      config({
+        source: localSourceForTest(),
+        collections: {
+          posts: collection({
+            label: "Posts",
+            path: "content/posts/*.mdx",
+            slugField: "slug",
+            previewPath: "/blog/:slug",
+            schema: { title: fields.text({ label: "Title" }), slug: fields.slug({ source: "title" }) },
+          }),
+        },
+        pages: {
+          blog: page({
+            label: "Blog index",
+            route: "/blog",
+            sections: {
+              intro: section({ label: "Intro", schema: { text: fields.text({ label: "Text" }) } }),
+            },
+          }),
+        },
+      }),
+    );
+
+    expect(manifest.tree.map((n) => n.key)).toEqual(["blog"]);
+    const pageNode = manifest.tree.find((n) => n.key === "blog")!;
+    expect("children" in pageNode ? pageNode.children.map((c) => c.key) : []).toEqual(["blog.intro", "posts"]);
+    expect("label" in pageNode ? pageNode.label : undefined).toBe("Blog index");
+  });
+
+  it("treats a collection previewPath with no :slug as an already-resolved route", () => {
+    const manifest = buildAdminManifest(
+      config({
+        source: localSourceForTest(),
+        collections: {
+          archive: collection({
+            label: "Archive",
+            path: "content/archive/*.mdx",
+            slugField: "slug",
+            previewPath: "/archive",
+            schema: { title: fields.text({ label: "Title" }), slug: fields.slug({ source: "title" }) },
+          }),
+        },
+      }),
+    );
+
+    expect(manifest.tree).toEqual([
+      { kind: "page", key: "__route:/archive", label: "Archive", route: "/archive", children: [manifest.byKey["archive"]] },
+    ]);
+  });
+
+  it("leaves a top-level entity with no previewPath as a flat, ungrouped node", () => {
+    const manifest = buildAdminManifest(
+      config({
+        source: localSourceForTest(),
+        singletons: {
+          settings: singleton({
+            label: "Site settings",
+            path: "content/settings.yaml",
+            schema: { siteName: fields.text({ label: "Site name" }) },
+          }),
+        },
+      }),
+    );
+
+    expect(manifest.tree).toEqual([manifest.byKey["settings"]]);
+  });
+
+  it("leaves a declared page()'s nested section children untouched when nothing else shares its route", () => {
+    const manifest = buildAdminManifest(buildMixedConfig());
+    const homeNode = manifest.tree.find((n) => n.key === "home")!;
+    expect("children" in homeNode ? homeNode.children.map((c) => c.key) : []).toEqual(["home.hero", "home.testimonials"]);
+  });
+
+  it("gives multiple synthetic groups distinct, collision-safe keys", () => {
+    const manifest = buildAdminManifest(
+      config({
+        source: localSourceForTest(),
+        collections: {
+          posts: collection({
+            label: "Posts",
+            path: "content/posts/*.mdx",
+            slugField: "slug",
+            previewPath: "/blog/:slug",
+            schema: { title: fields.text({ label: "Title" }), slug: fields.slug({ source: "title" }) },
+          }),
+          docs: collection({
+            label: "Docs",
+            path: "content/docs/*.mdx",
+            slugField: "slug",
+            previewPath: "/docs/:slug",
+            schema: { title: fields.text({ label: "Title" }), slug: fields.slug({ source: "title" }) },
+          }),
+        },
+      }),
+    );
+
+    const keys = manifest.tree.map((n) => n.key);
+    expect(keys).toEqual(["__route:/blog", "__route:/docs"]);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(Object.keys(manifest.byKey)).not.toContain("__route:/blog");
   });
 });

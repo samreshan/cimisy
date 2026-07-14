@@ -58,9 +58,12 @@ export type ManifestTreeNode =
  * uiOptions — never the propsSchema or toMdxNode/matches/extractProps
  * functions.
  *
- * `tree` mirrors the config's page/section hierarchy for navigation;
- * `byKey` is the flat lookup every screen that already has a key (entry
- * form, drafts, preview URLs) uses.
+ * `tree` mirrors the config's page/section hierarchy for navigation, then
+ * groups any top-level collection/singleton that has a `previewPath`
+ * under a route-labeled group too (merging into a matching declared
+ * `page()` group when one exists) — see `groupTopLevelByRoute`. `byKey`
+ * is the flat lookup every screen that already has a key (entry form,
+ * drafts, preview URLs) uses.
  */
 export interface AdminManifest {
   tree: ManifestTreeNode[];
@@ -95,6 +98,87 @@ function buildFieldManifest(fieldName: string, fieldDef: FieldDefinition): Field
 
 function buildFields(schema: Record<string, FieldDefinition>): FieldManifest[] {
   return Object.entries(schema).map(([fieldName, fieldDef]) => buildFieldManifest(fieldName, fieldDef));
+}
+
+/**
+ * Resolves the route a top-level entity's previewPath belongs to, for
+ * admin-tree grouping purposes only. A singleton's previewPath is already
+ * a fixed route. A collection's previewPath is a template with a literal
+ * ":slug" marker (e.g. "/blog/:slug", the same marker entry-form.tsx's
+ * buildPreviewUrl substitutes into) — stripped to yield the containing
+ * route ("/blog"). A previewPath with no ":slug" is already a route and
+ * is returned as-is. Returns undefined when there's no previewPath at
+ * all — such entities stay flat, unchanged.
+ */
+function deriveRouteBase(entity: EntityManifest): string | undefined {
+  if (!entity.previewPath) return undefined;
+  if (entity.kind === "singleton") return entity.previewPath;
+  const slugIndex = entity.previewPath.indexOf(":slug");
+  if (slugIndex === -1) return entity.previewPath;
+  const base = entity.previewPath.slice(0, slugIndex).replace(/\/+$/, "");
+  return base === "" ? "/" : base;
+}
+
+/** e.g. "/blog" -> "Blog", "/" -> "Home". */
+function deriveSyntheticGroupLabel(routeBase: string): string {
+  const segments = routeBase.split("/").filter(Boolean);
+  if (segments.length === 0) return "Home";
+  const last = segments[segments.length - 1]!;
+  return last.charAt(0).toUpperCase() + last.slice(1);
+}
+
+/**
+ * Second pass over the tree: pulls top-level collections/singletons with
+ * a resolved previewPath route out of the flat list and groups them by
+ * route — merging into a matching declared page() group when one exists
+ * (dedupe by route, no duplicate group), else synthesizing a new
+ * page-shaped group node at the position of its first contributing item.
+ * Declared page() groups and previewPath-less top-level entities are left
+ * exactly as pass one built them. Declarative only — routes come from
+ * previewPath already on the manifest, never from filesystem/App Router
+ * scanning.
+ */
+function groupTopLevelByRoute(tree: ManifestTreeNode[]): ManifestTreeNode[] {
+  const pageGroupByRoute = new Map<string, Extract<ManifestTreeNode, { kind: "page" }>>();
+  for (const node of tree) {
+    if (node.kind === "page" && node.route) pageGroupByRoute.set(node.route, node);
+  }
+
+  const syntheticGroupByRoute = new Map<string, Extract<ManifestTreeNode, { kind: "page" }>>();
+  const result: ManifestTreeNode[] = [];
+
+  for (const node of tree) {
+    if (node.kind === "page") {
+      result.push(node);
+      continue;
+    }
+    const routeBase = deriveRouteBase(node);
+    if (!routeBase) {
+      result.push(node);
+      continue;
+    }
+    const declaredGroup = pageGroupByRoute.get(routeBase);
+    if (declaredGroup) {
+      declaredGroup.children.push(node);
+      continue;
+    }
+    const existingSynthetic = syntheticGroupByRoute.get(routeBase);
+    if (existingSynthetic) {
+      existingSynthetic.children.push(node);
+      continue;
+    }
+    const syntheticGroup: Extract<ManifestTreeNode, { kind: "page" }> = {
+      kind: "page",
+      key: `__route:${routeBase}`,
+      label: deriveSyntheticGroupLabel(routeBase),
+      route: routeBase,
+      children: [node],
+    };
+    syntheticGroupByRoute.set(routeBase, syntheticGroup);
+    result.push(syntheticGroup);
+  }
+
+  return result;
 }
 
 export function buildAdminManifest(cimisyConfig: ResolvedCimisyConfig): AdminManifest {
@@ -141,5 +225,5 @@ export function buildAdminManifest(cimisyConfig: ResolvedCimisyConfig): AdminMan
     return entityFor(node.kind, node.key);
   });
 
-  return { tree, byKey, draftsSupported: cimisyConfig.source.capabilities.pullRequests };
+  return { tree: groupTopLevelByRoute(tree), byKey, draftsSupported: cimisyConfig.source.capabilities.pullRequests };
 }
