@@ -10,6 +10,7 @@ import { EntryForm } from "./entry-form.js";
 import { TopNav } from "./nav.js";
 import { SingletonForm } from "./singleton-form.js";
 import { TeamPage } from "./team.js";
+import { THEME_BOOTSTRAP_SCRIPT } from "./theme.js";
 
 export interface AdminAppProps {
   manifest: AdminManifest;
@@ -34,7 +35,13 @@ export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminApp
   }, [apiBasePath]);
 
   return (
-    <div className="cimisy-root">
+    // suppressHydrationWarning: the bootstrap script below sets data-theme on this exact element
+    // before React hydrates, which is by design (see THEME_BOOTSTRAP_SCRIPT's doc comment) — without
+    // this, React treats the server/client attribute difference as a hydration error and logs it.
+    <div className="cimisy-root" suppressHydrationWarning>
+      {/* Runs first, synchronously, so data-theme lands on this element before it paints —
+          see theme.tsx's THEME_BOOTSTRAP_SCRIPT doc comment for why ordering matters here. */}
+      <script suppressHydrationWarning dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
       {/* dangerouslySetInnerHTML, not a text child: <style> is RAWTEXT in HTML parsing (like
           <script>), so the browser never decodes entities in it, but React's default text-child
           rendering HTML-escapes quotes regardless — causing a server/client hydration mismatch
@@ -55,6 +62,7 @@ export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminApp
             basePath={basePath}
             apiBasePath={apiBasePath}
             draftsSupported={manifest.draftsSupported}
+            contentKey={segments[0]}
           />
           <AdminRoutes
             manifest={manifest}

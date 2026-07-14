@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "@tiptap/extension-link";
+import Placeholder from "@tiptap/extension-placeholder";
 import { EditorContent, useEditor } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -79,6 +80,11 @@ export function TiptapBlockEditor({ field, value, onChange, apiBasePath, draftRe
         Link.configure({ openOnClick: false, autolink: false, validate: isSafeUrl }),
         createSlashMenuExtension(blockTypes),
         DedupeBlockIds,
+        // Renders inside whichever node is currently empty (see admin-theme.ts's
+        // .is-editor-empty rule for the dashed-row styling) — the in-document
+        // equivalent of the old static "Type / to insert a block" caption below
+        // the editor, but shown exactly where the next block would land.
+        Placeholder.configure({ placeholder: "/ Type to insert a block" }),
       ],
       content: initialDoc as never,
       immediatelyRender: false,
@@ -100,9 +106,6 @@ export function TiptapBlockEditor({ field, value, onChange, apiBasePath, draftRe
       <div className="cimisy-editor-shell">
         <EditorContent editor={editor} />
       </div>
-      <p className="cimisy-muted" style={{ fontSize: "0.8em", margin: "6px 0" }}>
-        Type <code>/</code> to insert a block.
-      </p>
       <BlockOutline editor={editor} manifestByName={manifestByName} />
     </div>
   );

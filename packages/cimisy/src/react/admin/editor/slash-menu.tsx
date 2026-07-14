@@ -35,6 +35,24 @@ function defaultNodeFor(typeDef: BlockTypeManifest): Record<string, unknown> {
   }
 }
 
+/** A short glyph per block kind for the slash menu's icon column — mirrors defaultNodeFor's switch above so every case there has a matching visual. Custom (config-registered) block types fall through to a generic mark since there's no way to know what they render. */
+function iconFor(kind: string): string {
+  switch (kind) {
+    case "paragraph":
+      return "¶";
+    case "heading":
+      return "H";
+    case "code":
+      return "<>";
+    case "image":
+      return "▢";
+    case "callout":
+      return "!";
+    default:
+      return "◆";
+  }
+}
+
 interface SlashMenuListProps {
   items: BlockTypeManifest[];
   command: (item: BlockTypeManifest) => void;
@@ -86,6 +104,9 @@ const SlashMenuList = forwardRef<SlashMenuListHandle, SlashMenuListProps>(({ ite
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => command(item)}
         >
+          <span className="cimisy-slash-menu-item-icon" aria-hidden="true">
+            {iconFor(item.kind)}
+          </span>
           {item.label}
         </button>
       ))}
@@ -125,8 +146,17 @@ export function createSlashMenuExtension(blockTypes: BlockTypeManifest[]) {
                 });
                 element = component.element as HTMLElement;
                 element.style.position = "absolute";
-                element.style.zIndex = "50";
-                document.body.appendChild(element);
+                // Higher than any in-page chrome, including the sticky bottom action bar
+                // (z-index 1 — see admin-theme.ts's .cimisy-action-bar).
+                element.style.zIndex = "1000";
+                // Mounted as a descendant of .cimisy-root, not document.body: admin-theme.ts's
+                // colors are CSS custom properties scoped to .cimisy-root (deliberately, so they
+                // can't leak into/out of the consumer's own site styles), and custom properties
+                // only inherit through the real DOM tree — an element appended to document.body
+                // can't see them, however it's visually positioned. Falls back to document.body
+                // if .cimisy-root somehow isn't an ancestor (defensive, shouldn't happen).
+                const mountTarget = props.editor.view.dom.closest(".cimisy-root") ?? document.body;
+                mountTarget.appendChild(element);
                 positionElement(element, props.clientRect?.() ?? null);
               },
               onUpdate: (props: SuggestionProps<BlockTypeManifest>) => {

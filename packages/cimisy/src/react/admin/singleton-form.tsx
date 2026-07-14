@@ -3,7 +3,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import type { SingletonManifest } from "../../next/manifest.js";
 import { type PublishResult, apiUrl } from "./api.js";
-import { buildSingletonPreviewUrl, FieldsEditor } from "./entry-form.js";
+import { Breadcrumb, buildSingletonPreviewUrl, FieldsEditor } from "./entry-form.js";
 import { HistoryPanel } from "./history.js";
 
 /** The reserved slug singleton drafts/uploads use — mirror of shared/branch-name.ts's SINGLETON_DRAFT_SLUG (not imported: that module is server-side). */
@@ -28,6 +28,10 @@ export function SingletonForm({
   const [version, setVersion] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [neverSaved, setNeverSaved] = useState(false);
+  // Distinct from `error` (a failed *save*, shown inline above a fillable form that still has
+  // real values in it): a failed *load* means `values`/`version` never got populated, so the
+  // form can't be shown at all — submitting it would overwrite the real file with blanks.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
   const [draftRef, setDraftRef] = useState<string | undefined>(undefined);
@@ -38,9 +42,17 @@ export function SingletonForm({
   useEffect(() => {
     let cancelled = false;
     fetch(apiUrl(apiBasePath, `/singletons/${singleton.key}`))
-      .then((res) => res.json())
-      .then((data: { singleton: { values: Record<string, unknown>; version: string } | null }) => {
+      .then(async (res) => {
+        const data = (await res.json()) as {
+          singleton?: { values: Record<string, unknown>; version: string } | null;
+          error?: string;
+        };
         if (cancelled) return;
+        if (!res.ok) {
+          setLoadError(data.error ?? "Failed to load this singleton.");
+          setLoading(false);
+          return;
+        }
         if (data.singleton) {
           setValues(data.singleton.values);
           setVersion(data.singleton.version);
@@ -48,6 +60,12 @@ export function SingletonForm({
           setNeverSaved(true);
         }
         setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadError("Failed to load this singleton.");
+          setLoading(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -77,39 +95,37 @@ export function SingletonForm({
 
   if (loading) return <p className="cimisy-muted">Loading…</p>;
 
+  // A dead end, not a fillable form: `values`/`version` never got populated, so rendering the
+  // form here would let a Save silently overwrite the real file's fields with blanks.
+  if (loadError) {
+    return (
+      <div>
+        <Breadcrumb basePath={basePath} trail={[{ label: singleton.label }]} />
+        <p className="cimisy-banner cimisy-banner-danger">{loadError}</p>
+      </div>
+    );
+  }
+
   const canPreview = Boolean(singleton.previewPath);
 
   return (
     <div className="cimisy-entry-layout">
       <div className="cimisy-entry-main">
         <form onSubmit={handleSubmit}>
-          <a className="cimisy-crumb cimisy-link" href={basePath}>
-            &larr; Content
-          </a>
-          <h1 className="cimisy-heading">{singleton.label}</h1>
-          {canPreview && (
-            <p>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <Breadcrumb basePath={basePath} trail={[{ label: singleton.label }]} />
+            {canPreview && (
               <button
                 type="button"
                 className="cimisy-btn cimisy-btn-secondary"
                 onClick={() => setPreviewOpen((o) => !o)}
-                style={{ marginBottom: 4 }}
               >
                 {previewOpen ? "Hide preview" : "Show preview"}
               </button>
-            </p>
-          )}
+            )}
+          </div>
           {neverSaved && <p className="cimisy-muted">Not created yet — fill in the fields and save.</p>}
           {error && <p className="cimisy-banner cimisy-banner-danger">{error}</p>}
-          {publishResult?.status === "direct" && <p className="cimisy-banner cimisy-banner-success">Published directly.</p>}
-          {publishResult?.status === "draft" && (
-            <p className="cimisy-banner cimisy-banner-warning">
-              Saved as a draft on branch <code>{publishResult.branch}</code> —{" "}
-              <a href={publishResult.pullRequestUrl} target="_blank" rel="noreferrer">
-                view pull request &rarr;
-              </a>
-            </p>
-          )}
           <FieldsEditor
             fields={singleton.fields}
             values={values}
@@ -122,23 +138,44 @@ export function SingletonForm({
             slug={SINGLETON_SLUG}
             draftRef={draftRef}
           />
-          <button type="submit" className="cimisy-btn cimisy-btn-primary">
-            {neverSaved ? "Create" : "Save"}
-          </button>
+          <div className="cimisy-action-bar">
+            <div className="cimisy-action-bar-status">
+              {publishResult?.status === "draft" && publishResult.branch && (
+                <span className="cimisy-chip-branch">{publishResult.branch}</span>
+              )}
+              {publishResult?.status === "draft" && publishResult.pullRequestUrl && (
+                <a
+                  className="cimisy-link"
+                  style={{ fontSize: "0.85em" }}
+                  href={publishResult.pullRequestUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Pull request opened &rarr;
+                </a>
+              )}
+              {publishResult?.status === "direct" && (
+                <span className="cimisy-badge">
+                  <span className="cimisy-badge-dot cimisy-badge-dot-success" />
+                  Published
+                </span>
+              )}
+            </div>
+            <button type="submit" className="cimisy-btn cimisy-btn-primary">
+              {neverSaved ? "Create" : "Save"}
+            </button>
+          </div>
         </form>
         <HistoryPanel historyPath={`/singletons/${singleton.key}/history`} apiBasePath={apiBasePath} />
       </div>
       {canPreview && previewOpen && singleton.previewPath && (
         <div className="cimisy-entry-preview">
           <div className="cimisy-preview-header">
-            <span className="cimisy-muted" style={{ fontSize: "0.85em" }}>
-              Preview
+            <span className="cimisy-preview-eyebrow">Draft mode preview</span>
+            <span className="cimisy-badge">
+              <span className={`cimisy-badge-dot cimisy-badge-dot-${dirty ? "warning" : "accent"}`} />
+              {dirty ? "unsaved changes" : "draft"}
             </span>
-            {dirty && (
-              <span className="cimisy-badge" style={{ background: "var(--cimisy-warning-soft)", color: "var(--cimisy-warning)" }}>
-                unsaved changes not shown
-              </span>
-            )}
           </div>
           <iframe
             key={previewKey}

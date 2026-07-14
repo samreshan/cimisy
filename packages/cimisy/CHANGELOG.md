@@ -1,5 +1,22 @@
 # cimisy
 
+## 2.1.2
+
+### Minor Changes
+
+- Admin UI retheme + dark mode. The admin editor now uses Cimisy Blue and the same-hue "ink" neutral ramp (`brand/design-system`) in place of the original bone/charcoal/purple palette — the retheme `brand/BRAND.md` had deliberately deferred — and every surface has a matching dark theme, auto-detected from the OS and toggleable from a new button in the top nav (persisted to `localStorage`, applied before first paint so there's no flash).
+
+  Alongside the retheme, the entry editor picked up a few layout changes to read as a calmer, less chrome-heavy writing surface:
+
+  - A `cimisy / collection / entry` breadcrumb trail replaces the old "&larr; back" link + heading.
+  - The first plain-text field in a collection's schema now renders as a large, borderless hero title instead of a boxed input — the field editors reach for as "the title" in practice, not `slugField` (which names whatever the URL slug is derived from, often a separate auto-generated field).
+  - The block editor shows its "type to insert a block" hint inline, in whichever block is currently empty (via the new `@tiptap/extension-placeholder` dependency, admin-UI-only like the rest of the Tiptap family), instead of as static text below the editor. The slash-command menu also gained a small icon per block kind.
+  - The preview pane's header is now a "Draft mode preview" label with a status pill, and a sticky action bar at the bottom of the form surfaces the draft's branch and PR link next to Save — replacing the inline banners that used to carry that after a save.
+
+  Also fixes a bug found while verifying the above: `EntryForm`/`SingletonForm` could get stuck on "Loading…" forever if the initial fetch failed validation (e.g. a required field left empty) instead of surfacing the error.
+
+  No public API changed — `AdminApp`'s props, the manifest shape, and every route/handler are untouched. If you've overridden `.cimisy-*` class styles from the outside, re-check them against the new token names in `admin-theme.ts` (the CSS custom properties were renamed, e.g. `--cimisy-charcoal` → `--cimisy-text`, `--cimisy-purple` → `--cimisy-accent`).
+
 ## 2.0.2
 
 ### Patch Changes
