@@ -113,6 +113,81 @@ describe("runScan", () => {
     ]);
   });
 
+  it("resolves JSX components more than one hop deep (thin page.jsx -> XxxPage.jsx -> section component, this repo's own convention)", async () => {
+    await mkdir(path.join(appDir, "data"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "data", "leadership.js"),
+      `export const leaders = [{ name: "A", title: "CEO" }];`,
+    );
+    await mkdir(path.join(appDir, "components", "leadership"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "components", "leadership", "LeadershipGrid.jsx"),
+      `
+        import { leaders } from "../../data/leadership";
+        export function LeadershipGrid() {
+          return <div>{leaders.map((member) => <Card key={member.name} name={member.name} />)}</div>;
+        }
+      `,
+    );
+    await writeFile(
+      path.join(appDir, "components", "leadership", "LeadershipPage.jsx"),
+      `
+        "use client";
+        import { LeadershipGrid } from "./LeadershipGrid";
+        export function LeadershipPage() {
+          return <main><h1>Leadership</h1><LeadershipGrid /></main>;
+        }
+      `,
+    );
+    await mkdir(path.join(appDir, "leadership"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "leadership", "page.jsx"),
+      `
+        import { LeadershipPage } from "../components/leadership/LeadershipPage";
+        export default function Page() { return <LeadershipPage />; }
+      `,
+    );
+
+    const report = await runScan({ appDir, projectRoot: root });
+    expect(report.collectionCandidates).toHaveLength(1);
+    const candidate = report.collectionCandidates[0]!;
+    expect(candidate.variableName).toBe("leaders");
+    // attributed to the deepest component that actually renders it, not the page's direct child
+    expect(candidate.section).toBe("LeadershipGrid");
+    expect(candidate.sourceFile).toBe(path.join(appDir, "components", "leadership", "LeadershipGrid.jsx"));
+    expect(candidate.declarationFile).toBe(path.join(appDir, "data", "leadership.js"));
+  });
+
+  it("doesn't loop forever on an import cycle (A renders B renders A)", async () => {
+    await mkdir(path.join(appDir, "components"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "components", "A.jsx"),
+      `
+        import { B } from "./B";
+        export function A({ stop }) { return <div>{!stop && <B />}</div>; }
+      `,
+    );
+    await writeFile(
+      path.join(appDir, "components", "B.jsx"),
+      `
+        import { A } from "./A";
+        const items = [{ title: "x" }];
+        export function B() { return <div>{items.map(i => <p key={i.title}>{i.title}</p>)}<A stop /></div>; }
+      `,
+    );
+    await writeFile(
+      path.join(appDir, "page.jsx"),
+      `
+        import { A } from "./components/A";
+        export default function Page() { return <A />; }
+      `,
+    );
+
+    const report = await runScan({ appDir, projectRoot: root });
+    expect(report.collectionCandidates).toHaveLength(1);
+    expect(report.collectionCandidates[0]!.variableName).toBe("items");
+  });
+
   it("deduplicates a shared component's array across every page that renders it (SIA's Navbar scenario)", async () => {
     await mkdir(path.join(root, "src", "components"), { recursive: true });
     await writeFile(

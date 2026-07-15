@@ -93,6 +93,46 @@ export interface RunScanOptions {
   full?: boolean;
 }
 
+/**
+ * Resolves the full transitive JSX-component-import closure reachable from
+ * a route file: a page.tsx that renders <XxxPage/>, which itself renders
+ * <SomeGrid/>, which renders <Card/>, etc. — not just the first hop.
+ * findJsxSections only looks at the JSX tags/imports of the ONE file it's
+ * given, so this BFSes over its results, calling it again on every
+ * newly-resolved file until nothing new turns up. `visited` both dedupes
+ * and guards against import cycles (A renders B renders A). A file's
+ * "section" label is the name of the (possibly deeply-nested) component
+ * that actually renders it, not the page's direct child — that's the
+ * label that already reads right for the common thin `page.tsx` -> real
+ * page component -> individual section components convention.
+ */
+async function resolveFilesToScan(
+  pagePath: string,
+  pageText: string,
+  options: { pathAliases?: Record<string, string>; projectRoot?: string },
+  readCached: (file: string) => Promise<string>,
+): Promise<Map<string, string>> {
+  const filesToScan = new Map<string, string>([[pagePath, "page"]]);
+  const visited = new Set<string>([pagePath]);
+  const queue: Array<{ file: string; text: string }> = [{ file: pagePath, text: pageText }];
+
+  while (queue.length > 0) {
+    const { file, text } = queue.shift()!;
+    const sections = await findJsxSections(text, file, {
+      projectRoot: options.projectRoot,
+      pathAliases: options.pathAliases,
+    });
+    for (const section of sections) {
+      if (!section.sourceFile || visited.has(section.sourceFile)) continue;
+      visited.add(section.sourceFile);
+      filesToScan.set(section.sourceFile, section.componentName);
+      queue.push({ file: section.sourceFile, text: await readCached(section.sourceFile) });
+    }
+  }
+
+  return filesToScan;
+}
+
 /** "/" -> "home", "/about" -> "about", "/about/team" -> "about/team" (deriveKey's slugify collapses the "/" to "-"). */
 function pageKeyHintForRoute(route: string): string {
   return route === "/" ? "home" : route.replace(/^\//, "");
@@ -137,16 +177,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanReport> {
     const routePath = deriveRoutePath(pagePath, options.appDir);
     pages.push({ pagePath, routePath });
 
-    const sections = await findJsxSections(pageText, pagePath, {
-      projectRoot: options.projectRoot,
-      pathAliases: options.pathAliases,
-    });
-
-    const filesToScan = new Map<string, string>(); // sourceFile -> section label
-    filesToScan.set(pagePath, "page");
-    for (const section of sections) {
-      if (section.sourceFile) filesToScan.set(section.sourceFile, section.componentName);
-    }
+    const filesToScan = await resolveFilesToScan(
+      pagePath,
+      pageText,
+      { projectRoot: options.projectRoot, pathAliases: options.pathAliases },
+      readCached,
+    );
 
     for (const [file, sectionLabel] of filesToScan) {
       const text = await readCached(file);
