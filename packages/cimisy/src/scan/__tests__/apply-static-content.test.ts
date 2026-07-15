@@ -130,6 +130,27 @@ describe("applyStaticCandidate", () => {
     expect(sourceUnchanged).toContain("<h1>Welcome</h1>");
   });
 
+  it("names the actual config file in the githubSource refusal, not a hardcoded \"cimisy.config.ts\"", async () => {
+    await writeFile(
+      path.join(appDir, "page.tsx"),
+      `export default function Home() { return <section id="hero"><h1>Welcome</h1></section>; }`,
+    );
+    const jsConfigFilePath = path.join(root, "cimisy.config.js");
+    await writeFile(
+      jsConfigFilePath,
+      [
+        `const { config } = require("cimisy/config");`,
+        `const { githubSource } = require("cimisy/adapters/github");`,
+        `module.exports = config({ source: githubSource({ repo: "acme/site", appId: "1", privateKey: "x", clientId: "x", clientSecret: "x", sessionSecret: "x" }), collections: {} });`,
+      ].join("\n"),
+    );
+
+    const report = await runScan({ appDir, projectRoot: root, full: true });
+    const candidate = report.staticContentCandidates![0]!;
+
+    await expect(applyStaticCandidate({ candidate, configFilePath: jsConfigFilePath })).rejects.toThrow("cimisy.config.js uses githubSource");
+  });
+
   it("isolates a later failure (e.g. a key collision) from a previously-applied candidate's changes", async () => {
     await mkdir(path.join(root, "src", "components"), { recursive: true });
     await writeFile(

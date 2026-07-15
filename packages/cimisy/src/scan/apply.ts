@@ -103,12 +103,12 @@ export async function applyCandidate(options: ApplyCandidateOptions): Promise<Ap
   const detection = configExisted ? detectSource(configText, configFilePath) : { kind: "local" as const, rootDir: "./content" };
   if (detection.kind === "github") {
     throw new Error(
-      "cimisy.config.ts uses githubSource — \"cimisy import\" only supports collections stored via localSource for now.",
+      `${path.basename(configFilePath)} uses githubSource — "cimisy import" only supports collections stored via localSource for now.`,
     );
   }
   if (detection.kind === "unknown") {
     throw new Error(
-      "Could not determine cimisy.config.ts's storage adapter (expected a localSource({ rootDir }) call) — refusing to guess where content should be written.",
+      `Could not determine ${path.basename(configFilePath)}'s storage adapter (expected a localSource({ rootDir }) call) — refusing to guess where content should be written.`,
     );
   }
 

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import ts from "typescript";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyStaticCandidate } from "../apply-static-content.js";
 import { resolveConfigFilePath } from "../config-detection.js";
 import { runScan } from "../report.js";
@@ -63,6 +63,7 @@ describe("cimisy import — end-to-end against a realistic pre-existing project"
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   it("resolves the existing .js config, merges hyphenated-key sections into one page, and emits plain JS", async () => {
@@ -96,5 +97,35 @@ describe("cimisy import — end-to-end against a realistic pre-existing project"
     const bootstrapPos = rewrittenSource.indexOf("const cimisyReader = createReader");
     const firstUsePos = rewrittenSource.indexOf("cimisyReader.pages");
     expect(bootstrapPos).toBeLessThan(firstUsePos);
+  });
+
+  it("applies successfully against the README's own NODE_ENV-based local/github switch, in dev", async () => {
+    // Overwrite the plain localSource config from beforeEach with the documented ternary shape.
+    const configFilePath = path.join(root, "cimisy.config.js");
+    await writeFile(
+      configFilePath,
+      [
+        `const { collection, config, fields } = require("cimisy/config");`,
+        `const { localSource } = require("cimisy/adapters/local");`,
+        `const { githubSource } = require("cimisy/adapters/github");`,
+        `module.exports = config({`,
+        `  source:`,
+        `    process.env.NODE_ENV === "development"`,
+        `      ? localSource({ rootDir: "./content" })`,
+        `      : githubSource({ repo: "acme/site", appId: "1", privateKey: "x", clientId: "x", clientSecret: "x", sessionSecret: "x" }),`,
+        `  collections: {`,
+        `    jobs: collection({ label: "Jobs", path: "jobs/*.mdx", slugField: "slug", schema: { slug: fields.slug({ source: "title" }), title: fields.text({ label: "Title" }) } }),`,
+        `  },`,
+        `});`,
+        ``,
+      ].join("\n"),
+    );
+    vi.stubEnv("NODE_ENV", "development");
+
+    const report = await runScan({ appDir, projectRoot: root, full: true });
+    const candidate = report.staticContentCandidates!.find((c) => c.regionHint === "open-roles")!;
+
+    const result = await applyStaticCandidate({ candidate, configFilePath });
+    expect(result.error).toBeUndefined();
   });
 });

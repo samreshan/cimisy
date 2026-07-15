@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectSource, resolveConfigFilePath } from "../config-detection.js";
 
 describe("resolveConfigFilePath", () => {
@@ -40,6 +40,10 @@ describe("resolveConfigFilePath", () => {
 });
 
 describe("detectSource", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("still detects localSource in a plain .js config (detectSource itself was never extension-specific)", () => {
     const configText = `
       module.exports = {
@@ -48,5 +52,50 @@ describe("detectSource", () => {
       };
     `;
     expect(detectSource(configText, "/project/cimisy.config.js")).toEqual({ kind: "local", rootDir: "./content" });
+  });
+
+  describe("the README's NODE_ENV-based local/github switch", () => {
+    const configText = `
+      const source =
+        process.env.NODE_ENV === "development"
+          ? localSource({ rootDir: "." })
+          : githubSource({ owner: "x", repo: "y" });
+      module.exports = { source };
+    `;
+
+    it("resolves to local when NODE_ENV is development, even though githubSource is textually last", () => {
+      vi.stubEnv("NODE_ENV", "development");
+      expect(detectSource(configText, "/project/cimisy.config.js")).toEqual({ kind: "local", rootDir: "." });
+    });
+
+    it("resolves to github when NODE_ENV is production", () => {
+      vi.stubEnv("NODE_ENV", "production");
+      expect(detectSource(configText, "/project/cimisy.config.js")).toEqual({ kind: "github" });
+    });
+
+    it("resolves to github when NODE_ENV is unset (matches the else branch)", () => {
+      vi.stubEnv("NODE_ENV", undefined);
+      expect(detectSource(configText, "/project/cimisy.config.js")).toEqual({ kind: "github" });
+    });
+
+    it("handles the reversed operand order and !== negation", () => {
+      const reversed = `
+        const source =
+          "production" !== process.env.NODE_ENV
+            ? localSource({ rootDir: "." })
+            : githubSource({ owner: "x", repo: "y" });
+      `;
+      vi.stubEnv("NODE_ENV", "development");
+      expect(detectSource(reversed, "/project/cimisy.config.js")).toEqual({ kind: "local", rootDir: "." });
+      vi.stubEnv("NODE_ENV", "production");
+      expect(detectSource(reversed, "/project/cimisy.config.js")).toEqual({ kind: "github" });
+    });
+  });
+
+  it("refuses to guess a conditional keyed on anything other than NODE_ENV, rather than picking whichever branch is textually last", () => {
+    const configText = `
+      const source = someOtherFlag ? localSource({ rootDir: "." }) : githubSource({ owner: "x", repo: "y" });
+    `;
+    expect(detectSource(configText, "/project/cimisy.config.js")).toEqual({ kind: "unknown" });
   });
 });
