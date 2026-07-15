@@ -63,6 +63,40 @@ export default function NewsPage() {
     expect(result).toContain('import cimisyConfig from "../../../cimisy.config";');
   });
 
+  it("anchors a second candidate's fetch after an existing cimisyReader bootstrap, not before it (TDZ regression)", async () => {
+    // Simulates the state after a first candidate ("articles") was already applied to this function.
+    const sourceText = `
+      const partners = [{ name: "X" }];
+      export default async function Page() {
+        const cimisyReader = createReader(cimisyConfig);
+        const articles = (await cimisyReader.collections.articles.all()).map((entry) => entry.values);
+        return <div>{articles.map(a => <p key={a.title}>{a.title}</p>)}{partners.map(p => <span key={p.name}>{p.name}</span>)}</div>;
+      }
+    `;
+    const { repeatingContent } = await findRepeatingContent(sourceText, "/app/page.tsx");
+    const candidate = repeatingContent.find((c) => c.variableName === "partners")!;
+    const result = rewriteArraySource({
+      sourceText,
+      filePath: "/project/src/app/page.tsx",
+      configFilePath: "/project/cimisy.config.ts",
+      variableName: candidate.variableName,
+      collectionName: "partners",
+      fields: inferSchema(candidate.items).fields,
+      declarationStart: candidate.declarationStart,
+      declarationEnd: candidate.declarationEnd,
+      mapCallStart: candidate.mapCallStart,
+    });
+    assertNoSyntaxErrors(result);
+    // exactly one bootstrap — not re-declared
+    expect((result.match(/const cimisyReader = createReader/g) ?? []).length).toBe(1);
+    // and it comes before both fetches that use it
+    const bootstrapPos = result.indexOf("const cimisyReader = createReader");
+    const articlesUse = result.indexOf("cimisyReader.collections.articles");
+    const partnersUse = result.indexOf("cimisyReader.collections.partners");
+    expect(bootstrapPos).toBeLessThan(articlesUse);
+    expect(bootstrapPos).toBeLessThan(partnersUse);
+  });
+
   it("does not double-mark an already-async function", async () => {
     const sourceText = `
       const items = [{ title: "A" }];

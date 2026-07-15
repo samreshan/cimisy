@@ -198,4 +198,48 @@ export default Home;
     expect(result).toContain("cimisyReader.singletons.footer.get()");
     expect(result).toContain("{footerContent.label}");
   });
+
+  it("anchors a second candidate's fetch after an existing cimisyReader bootstrap, not before it (TDZ regression)", () => {
+    // Simulates the state after a first candidate ("hero") was already applied to this function — plus a
+    // second, not-yet-rewritten region ("cta") sharing the same function, which is what the next
+    // rewriteStaticContentSource call targets.
+    const withSecondRegion = `export default async function Home() {
+  const cimisyReader = createReader(cimisyConfig);
+  const heroContent = ((await cimisyReader.pages.home.hero.get())?.values as { heading: string }) ?? { heading: "" };
+  return (
+    <>
+      <section id="hero">
+        <h1>{heroContent.heading}</h1>
+      </section>
+      <section id="cta"><a href="/contact">Contact us</a></section>
+    </>
+  );
+}
+`;
+    const { staticContent } = findStaticContent(withSecondRegion, "/project/src/app/page.tsx");
+    const ctaCandidate = staticContent.find((c) => c.regionHint === "cta")!;
+    const proposal = inferStaticSchema(ctaCandidate);
+
+    const result = rewriteStaticContentSource({
+      sourceText: withSecondRegion,
+      filePath: "/project/src/app/page.tsx",
+      configFilePath: "/project/cimisy.config.ts",
+      variableName: "ctaContent",
+      readerPath: { kind: "page-section", pageKey: "home", sectionKey: "cta" },
+      fields: ctaCandidate.fields,
+      fieldAssignments: proposal.fieldAssignments,
+      proposalFields: proposal.fields,
+      anchorPos: ctaCandidate.regionStart,
+    });
+
+    assertNoSyntaxErrors(result);
+    // exactly one bootstrap — not re-declared
+    expect((result.match(/const cimisyReader = createReader/g) ?? []).length).toBe(1);
+    // and it comes before both fetches that use it
+    const bootstrapPos = result.indexOf("const cimisyReader = createReader");
+    const heroUse = result.indexOf("cimisyReader.pages.home.hero");
+    const ctaUse = result.indexOf("cimisyReader.pages.home.cta");
+    expect(bootstrapPos).toBeLessThan(heroUse);
+    expect(bootstrapPos).toBeLessThan(ctaUse);
+  });
 });

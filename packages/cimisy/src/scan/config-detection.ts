@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import ts from "typescript";
 
 export type SourceDetection = { kind: "local"; rootDir: string } | { kind: "github" } | { kind: "unknown" };
@@ -45,4 +46,24 @@ export async function pathExists(candidate: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Every extension a hand-authored cimisy.config might use — .ts first since that's the README quickstart's own default, but a plain-JavaScript project (no tsconfig.json) commonly has .js or .mjs instead. */
+const CONFIG_FILE_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs", ".cjs"];
+
+/**
+ * Finds the project's actual cimisy.config.* file, trying each recognized
+ * extension in turn — apply-time codemods must edit the config that's
+ * really there (e.g. a hand-authored cimisy.config.js with existing
+ * collections), not a hardcoded ".ts" guess that would silently scaffold a
+ * competing, empty file alongside it. Falls back to the conventional
+ * "cimisy.config.ts" path (which doesn't exist on disk yet) when none of
+ * the extensions are found, for callers that scaffold a fresh file there.
+ */
+export async function resolveConfigFilePath(projectRoot: string): Promise<string> {
+  for (const ext of CONFIG_FILE_EXTENSIONS) {
+    const candidate = path.join(projectRoot, `cimisy.config${ext}`);
+    if (await pathExists(candidate)) return candidate;
+  }
+  return path.join(projectRoot, "cimisy.config.ts");
 }

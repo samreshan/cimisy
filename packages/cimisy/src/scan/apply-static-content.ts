@@ -8,6 +8,7 @@ import { blocks, fields } from "../config/fields/index.js";
 import type { FieldDefinition } from "../config/fields/types.js";
 import { writeSingleton } from "../content/singleton-store.js";
 import { LocalStorageAdapter } from "../storage/local.js";
+import { findStaticContent } from "./analyze-static-content.js";
 import { detectSource, pathExists } from "./config-detection.js";
 import type { StaticFieldProposal } from "./infer-static-schema.js";
 import type { StaticContentCandidateReport } from "./report.js";
@@ -144,16 +145,35 @@ export async function applyStaticCandidate(options: ApplyStaticCandidateOptions)
   }
 
   const sourceText = await readFile(candidate.sourceFile, "utf8");
+  // Re-derive this region's byte offsets from the text just read, rather than trusting candidate.fields/regionStart —
+  // those were captured at scan time, and a prior candidate applied earlier in the same "cimisy import" run may
+  // have already edited this same file, shifting every offset after its edit. regionHint (an id/className token or
+  // component name) is stable across that edit — it never depends on byte position — so it's what re-identifies
+  // this region in the fresh scan. The field VALUES (and therefore `proposal`, which only encodes those) can't have
+  // changed either, since a correctly-scoped earlier edit only touches OTHER regions, never this one.
+  const freshRegion = findStaticContent(sourceText, candidate.sourceFile).staticContent.find(
+    (region) => region.regionHint === candidate.regionHint,
+  );
+  if (!freshRegion) {
+    throw new Error(
+      `Could not find region "${candidate.regionHint}" in ${candidate.sourceFile} anymore — it may have been altered by an earlier candidate applied in this same run. Re-run "cimisy scan --full" and try again.`,
+    );
+  }
+  if (freshRegion.fields.length !== proposal.fieldAssignments.length) {
+    throw new Error(
+      `Region "${candidate.regionHint}" in ${candidate.sourceFile} no longer has the same fields it did when scanned (found ${freshRegion.fields.length}, expected ${proposal.fieldAssignments.length}) — re-run "cimisy scan --full" and try again.`,
+    );
+  }
   const rewritten = rewriteStaticContentSource({
     sourceText,
     filePath: candidate.sourceFile,
     configFilePath,
     variableName: toVariableName(candidate.proposedKey),
     readerPath,
-    fields: candidate.fields,
+    fields: freshRegion.fields,
     fieldAssignments: proposal.fieldAssignments,
     proposalFields: proposal.fields,
-    anchorPos: candidate.regionStart,
+    anchorPos: freshRegion.regionStart,
   });
   await writeFile(candidate.sourceFile, rewritten, "utf8");
 

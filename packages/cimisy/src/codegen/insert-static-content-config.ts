@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { StaticFieldProposal, StaticSchemaProposal } from "../scan/infer-static-schema.js";
 import { ensureNamedImport, insertObjectLiteralProperty } from "./insert-collection-config.js";
-import { objectKeyFor } from "./source-edit-utils.js";
+import { objectKeyFor, propertyKeyText } from "./source-edit-utils.js";
 
 export interface InsertSingletonOptions {
   name: string;
@@ -41,7 +41,7 @@ function buildSingletonSourceText(options: InsertSingletonOptions, baseIndent: s
   const inner = `${baseIndent}  `;
   const fieldIndent = `${inner}  `;
   return [
-    `${baseIndent}${options.name}: singleton({`,
+    `${baseIndent}${objectKeyFor(options.name)}: singleton({`,
     `${inner}label: ${JSON.stringify(options.label)},`,
     `${inner}path: ${JSON.stringify(options.path)},`,
     `${inner}schema: {`,
@@ -55,7 +55,7 @@ function buildSectionSourceText(options: InsertSectionOptions, baseIndent: strin
   const inner = `${baseIndent}  `;
   const fieldIndent = `${inner}  `;
   return [
-    `${baseIndent}${options.sectionKey}: section({`,
+    `${baseIndent}${objectKeyFor(options.sectionKey)}: section({`,
     `${inner}label: ${JSON.stringify(options.sectionLabel)},`,
     `${inner}schema: {`,
     ...buildSchemaLines(options.proposal, options.sectionKey, fieldIndent),
@@ -67,7 +67,7 @@ function buildSectionSourceText(options: InsertSectionOptions, baseIndent: strin
 function buildPageWithSectionSourceText(options: InsertSectionOptions, baseIndent: string): string {
   const inner = `${baseIndent}  `;
   const sectionsIndent = `${inner}  `;
-  const lines = [`${baseIndent}${options.pageKey}: page({`, `${inner}label: ${JSON.stringify(options.pageLabel)},`];
+  const lines = [`${baseIndent}${objectKeyFor(options.pageKey)}: page({`, `${inner}label: ${JSON.stringify(options.pageLabel)},`];
   if (options.pageRoute) lines.push(`${inner}route: ${JSON.stringify(options.pageRoute)},`);
   lines.push(
     `${inner}path: ${JSON.stringify(options.pagePath)},`,
@@ -103,33 +103,23 @@ function findConfigObjectArgument(source: ts.SourceFile): ts.ObjectLiteralExpres
   return found;
 }
 
-/** Finds `name: {...}` (a property whose value is itself an object literal — e.g. `singletons`/`pages`) inside `obj`. */
+/** Finds `name: {...}` (a property whose value is itself an object literal — e.g. `singletons`/`pages`) inside `obj`. Matches a key declared either as a bare identifier or a quoted string literal (see propertyKeyText) — a previously-inserted kebab-case key, e.g. a page named "open-roles", is only ever emitted quoted. */
 function findNamedObjectProperty(obj: ts.ObjectLiteralExpression, name: string): ts.ObjectLiteralExpression | null {
   for (const prop of obj.properties) {
-    if (
-      ts.isPropertyAssignment(prop) &&
-      ts.isIdentifier(prop.name) &&
-      prop.name.text === name &&
-      ts.isObjectLiteralExpression(prop.initializer)
-    ) {
-      return prop.initializer;
+    if (propertyKeyText(prop) === name && ts.isObjectLiteralExpression((prop as ts.PropertyAssignment).initializer)) {
+      return (prop as ts.PropertyAssignment).initializer as ts.ObjectLiteralExpression;
     }
   }
   return null;
 }
 
-/** Finds `name: someCall({...})` (e.g. `homeKey: page({...})`) inside `obj`, returning the call's own first-argument object literal — or null if `name` isn't present in this shape. */
+/** Finds `name: someCall({...})` (e.g. `homeKey: page({...})`) inside `obj`, returning the call's own first-argument object literal — or null if `name` isn't present in this shape. Same quoted-or-bare key matching as findNamedObjectProperty. */
 function findNamedCallArgumentObject(obj: ts.ObjectLiteralExpression, name: string): ts.ObjectLiteralExpression | null {
   for (const prop of obj.properties) {
-    if (
-      ts.isPropertyAssignment(prop) &&
-      ts.isIdentifier(prop.name) &&
-      prop.name.text === name &&
-      ts.isCallExpression(prop.initializer) &&
-      prop.initializer.arguments[0] &&
-      ts.isObjectLiteralExpression(prop.initializer.arguments[0])
-    ) {
-      return prop.initializer.arguments[0];
+    if (propertyKeyText(prop) !== name) continue;
+    const initializer = (prop as ts.PropertyAssignment).initializer;
+    if (ts.isCallExpression(initializer) && initializer.arguments[0] && ts.isObjectLiteralExpression(initializer.arguments[0])) {
+      return initializer.arguments[0];
     }
   }
   return null;
@@ -140,7 +130,7 @@ function assertNoTopLevelNameCollision(configObj: ts.ObjectLiteralExpression, na
   for (const topKey of ["collections", "singletons", "pages"]) {
     const obj = findNamedObjectProperty(configObj, topKey);
     if (!obj) continue;
-    const collision = obj.properties.some((p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === name);
+    const collision = obj.properties.some((p) => propertyKeyText(p) === name);
     if (collision) {
       throw new Error(`cimisy.config.ts already has a ${topKey.slice(0, -1)} named "${name}".`);
     }
@@ -240,9 +230,7 @@ export function insertSectionIntoPageConfig(sourceText: string, options: InsertS
           `Page "${options.pageKey}" in cimisy.config.ts doesn't have a \`sections: {...}\` object — refusing to guess its shape.`,
         );
       }
-      const collision = sectionsObj.properties.some(
-        (p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === options.sectionKey,
-      );
+      const collision = sectionsObj.properties.some((p) => propertyKeyText(p) === options.sectionKey);
       if (collision) {
         throw new Error(`Page "${options.pageKey}" already has a section named "${options.sectionKey}".`);
       }

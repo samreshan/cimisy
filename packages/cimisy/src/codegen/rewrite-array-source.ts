@@ -8,6 +8,8 @@ import {
   expandToFullLines,
   findEnclosingFunction,
   findNodeAtPosition,
+  findReaderBootstrap,
+  isTypeScriptFile,
   lineIndentBefore,
   toImportSpecifier,
   type FunctionLike,
@@ -56,23 +58,17 @@ function buildValuesCastType(fieldsProposal: FieldProposal[]): string {
   return `{ ${fieldsProposal.map((f) => `${f.name}: ${tsTypeForField(f.proposedKind)}`).join("; ")} }`;
 }
 
-/** `as {...}` type assertions are TypeScript-only syntax — inserting one into a plain .js/.jsx file (a valid App Router page/component shape) would leave behind code that fails to even parse. */
-function isTypeScriptFile(filePath: string): boolean {
-  return /\.tsx?$/.test(filePath);
-}
-
 function fetchReplacementLines(
   indent: string,
   variableName: string,
   collectionName: string,
   fieldsProposal: FieldProposal[],
   useTypeCast: boolean,
+  skipReaderBootstrap: boolean,
 ): string {
   const castSuffix = useTypeCast ? ` as ${buildValuesCastType(fieldsProposal)}` : "";
-  return [
-    `const cimisyReader = createReader(cimisyConfig);`,
-    `${indent}const ${variableName} = (await cimisyReader.collections.${collectionName}.all()).map((entry) => entry.values${castSuffix});`,
-  ].join("\n");
+  const fetchLine = `const ${variableName} = (await cimisyReader.collections.${collectionName}.all()).map((entry) => entry.values${castSuffix});`;
+  return skipReaderBootstrap ? fetchLine : [`const cimisyReader = createReader(cimisyConfig);`, `${indent}${fetchLine}`].join("\n");
 }
 
 /**
@@ -94,12 +90,19 @@ function buildBodyInsertEdit(
 ): TextEdit {
   const outerIndent = lineIndentBefore(sourceText, fn.getStart(source));
   const innerIndent = `${outerIndent}  `;
+  // A function that already hosts an earlier-applied candidate (this same "cimisy import" run applied
+  // another array sharing this function first) already has the `cimisyReader` bootstrap line — inserting
+  // it again would be a duplicate `const` declaration, an actual SyntaxError, not just noise. When that's
+  // the case, the new fetch must be anchored right after that existing bootstrap, not at the block's start
+  // (the first candidate's own insertion point) — inserting above it would use `cimisyReader` before its
+  // declaration, a TDZ ReferenceError at runtime.
+  const existingBootstrap = fn.body && ts.isBlock(fn.body) ? findReaderBootstrap(fn, "cimisyReader") : null;
 
   if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) {
     const bodyStart = fn.body.getStart(source);
     const bodyEnd = fn.body.getEnd();
     const originalBodyText = sourceText.slice(bodyStart, bodyEnd);
-    const text = `{\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, collectionName, fieldsProposal, useTypeCast)}\n${innerIndent}return ${originalBodyText};\n${outerIndent}}`;
+    const text = `{\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, collectionName, fieldsProposal, useTypeCast, false)}\n${innerIndent}return ${originalBodyText};\n${outerIndent}}`;
     return { start: bodyStart, end: bodyEnd, text };
   }
 
@@ -107,11 +110,11 @@ function buildBodyInsertEdit(
   if (!block || !ts.isBlock(block)) {
     throw new Error("Expected a block-bodied function — cannot safely locate an insertion point.");
   }
-  const openBracePos = block.getStart(source) + 1;
+  const insertPos = existingBootstrap ? existingBootstrap.getEnd() : block.getStart(source) + 1;
   return {
-    start: openBracePos,
-    end: openBracePos,
-    text: `\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, collectionName, fieldsProposal, useTypeCast)}`,
+    start: insertPos,
+    end: insertPos,
+    text: `\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, collectionName, fieldsProposal, useTypeCast, existingBootstrap !== null)}`,
   };
 }
 

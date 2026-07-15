@@ -7,6 +7,7 @@ import ts from "typescript";
 import { humanizeLabel } from "../codegen/insert-collection-config.js";
 import { applyCandidate } from "../scan/apply.js";
 import { applyStaticCandidate } from "../scan/apply-static-content.js";
+import { resolveConfigFilePath } from "../scan/config-detection.js";
 import { defaultReportPath, loadScanReport, printScanReport, runScan, saveScanReport, type StaticContentCandidateReport } from "../scan/report.js";
 
 async function pathExists(candidate: string): Promise<boolean> {
@@ -151,7 +152,7 @@ async function runImportCommand(projectRoot: string, args: string[]): Promise<vo
   const branch = createImportBranch(projectRoot);
   clack.log.info(`Created branch ${branch}`);
 
-  const configFilePath = path.join(projectRoot, "cimisy.config.ts");
+  const configFilePath = await resolveConfigFilePath(projectRoot);
   for (const choice of selected) {
     const [kind, indexText] = choice.split(":");
     const index = Number(indexText);

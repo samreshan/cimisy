@@ -346,6 +346,70 @@ export async function findRepeatingContent(
   return { repeatingContent, unanalyzable };
 }
 
+export interface RelocatedMapUsage {
+  mapCallStart: number;
+  /** Present only when `variableName`'s own array declaration also lives in this same file. */
+  localDeclaration?: { declarationStart: number; declarationEnd: number };
+}
+
+/**
+ * Re-locates one variable's `.map(` call (and, if present, its own local
+ * `const X = [...]` declaration) in `sourceText` — used when applying
+ * multiple candidates that share one sourceFile in the same `cimisy
+ * import` run, since an earlier-applied candidate's edit (deleting a
+ * declaration, inserting a fetch) shifts every byte offset after it,
+ * silently corrupting a later candidate's stale scan-time offsets rather
+ * than just failing loudly. Deliberately synchronous and same-file-only —
+ * unlike findRepeatingContent, it never resolves cross-file imports, since
+ * the caller already knows from the original scan whether this candidate's
+ * declaration is local or cross-file (RepeatingContentCandidate.declarationFile
+ * vs sourceFile) and only needs fresh positions, not a fresh cross-file
+ * lookup. Returns null if `variableName` is no longer `.map()`'d at all
+ * (shouldn't normally happen; only candidates already found by a prior
+ * scan take this path).
+ */
+export function relocateMapUsage(sourceText: string, filePath: string, variableName: string): RelocatedMapUsage | null {
+  const source = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+
+  let mapCallStart: number | null = null;
+  const visitForMapUsage = (node: ts.Node): void => {
+    if (mapCallStart !== null) return;
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "map" &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === variableName
+    ) {
+      mapCallStart = node.getStart(source);
+      return;
+    }
+    ts.forEachChild(node, visitForMapUsage);
+  };
+  visitForMapUsage(source);
+  if (mapCallStart === null) return null;
+
+  let localDeclaration: { declarationStart: number; declarationEnd: number } | undefined;
+  const visitForDeclarations = (node: ts.Node): void => {
+    if (localDeclaration) return;
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === variableName &&
+      node.initializer &&
+      ts.isArrayLiteralExpression(node.initializer)
+    ) {
+      const statement = findEnclosingStatement(node);
+      localDeclaration = { declarationStart: statement.getStart(source), declarationEnd: statement.getEnd() };
+      return;
+    }
+    ts.forEachChild(node, visitForDeclarations);
+  };
+  visitForDeclarations(source);
+
+  return { mapCallStart, localDeclaration };
+}
+
 const JSX_TAG_DENYLIST = new Set(["Fragment"]);
 
 /**

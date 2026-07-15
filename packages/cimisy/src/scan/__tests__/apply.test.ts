@@ -310,4 +310,51 @@ describe("applyCandidate", () => {
     const rewrittenSource = await readFile(path.join(appDir, "news", "page.tsx"), "utf8");
     expect(rewrittenSource).toContain("cimisyReader.collections.news.all()");
   });
+
+  describe("multiple candidates sharing one source file and one enclosing function (cimisy import selecting several at once)", () => {
+    it("applies both without corrupting the file, with a single correctly-ordered cimisyReader bootstrap", async () => {
+      await writeFile(
+        path.join(appDir, "news", "page.tsx"),
+        `
+          const articles = [{ title: "A" }, { title: "B" }];
+          const partners = [{ name: "X" }, { name: "Y" }];
+          export default function Page() {
+            return (
+              <div>
+                {articles.map(a => <p key={a.title}>{a.title}</p>)}
+                {partners.map(p => <span key={p.name}>{p.name}</span>)}
+              </div>
+            );
+          }
+        `,
+      );
+
+      const report = await runScan({ appDir, projectRoot: root });
+      expect(report.collectionCandidates).toHaveLength(2);
+
+      for (const candidate of report.collectionCandidates) {
+        const result = await applyCandidate({
+          candidate,
+          configFilePath,
+          collectionName: candidate.variableName,
+          collectionLabel: candidate.variableName,
+          contentPath: `${candidate.variableName}/*.mdx`,
+        });
+        expect(result.items.every((i) => !i.error)).toBe(true);
+      }
+
+      const rewrittenSource = await readFile(path.join(appDir, "news", "page.tsx"), "utf8");
+      assertNoSyntaxErrors(rewrittenSource);
+      // exactly one bootstrap line, not one per candidate (a duplicate `const cimisyReader` is a real SyntaxError)
+      expect((rewrittenSource.match(/const cimisyReader = createReader/g) ?? []).length).toBe(1);
+      // and it must come before any use of it — inserting a later candidate's fetch ABOVE an earlier
+      // candidate's bootstrap is a TDZ ReferenceError at runtime, invisible to a syntax-only check
+      const bootstrapPos = rewrittenSource.indexOf("const cimisyReader = createReader");
+      const firstUsePos = rewrittenSource.indexOf("cimisyReader.collections");
+      expect(bootstrapPos).toBeGreaterThan(-1);
+      expect(bootstrapPos).toBeLessThan(firstUsePos);
+      expect(rewrittenSource).toContain("cimisyReader.collections.articles.all()");
+      expect(rewrittenSource).toContain("cimisyReader.collections.partners.all()");
+    });
+  });
 });

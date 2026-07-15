@@ -160,4 +160,54 @@ describe("applyStaticCandidate", () => {
     expect(configAfterSecond).toContain("footer: singleton({");
     expect((configAfterSecond.match(/footer: singleton\(/g) ?? []).length).toBe(1);
   });
+
+  describe("multiple candidates sharing one source file (cimisy import selecting several at once)", () => {
+    it("applies all of them without offset failures, merging into a single page — not one per candidate", async () => {
+      await mkdir(path.join(appDir, "careers"), { recursive: true });
+      await writeFile(
+        path.join(appDir, "careers", "page.tsx"),
+        `
+          export default function Careers() {
+            return (
+              <div>
+                <section id="block"><h1>Block</h1></section>
+                <section id="careers-page"><h1>Careers Page</h1></section>
+                <section id="job-item"><h1>Job Item</h1></section>
+              </div>
+            );
+          }
+        `,
+      );
+
+      const report = await runScan({ appDir, projectRoot: root, full: true });
+      expect(report.staticContentCandidates).toHaveLength(3);
+
+      for (const candidate of report.staticContentCandidates!) {
+        const result = await applyStaticCandidate({ candidate, configFilePath });
+        expect(result.error).toBeUndefined();
+      }
+
+      const configText = await readFile(configFilePath, "utf8");
+      assertNoSyntaxErrors(configText);
+      // one merged page, not three separate "careers: page(" blocks (regression test for the duplicate-page bug)
+      expect((configText.match(/careers:\s*page\(/g) ?? []).length).toBe(1);
+      // kebab-case-derived section keys are quoted, not bare identifiers
+      expect(configText).toContain('"careers-page": section({');
+      expect(configText).toContain('"job-item": section({');
+
+      const rewrittenSource = await readFile(path.join(appDir, "careers", "page.tsx"), "utf8");
+      assertNoSyntaxErrors(rewrittenSource);
+      // exactly one `cimisyReader` bootstrap line, not one per candidate (regression test for the duplicate-const bug)
+      expect((rewrittenSource.match(/const cimisyReader = createReader/g) ?? []).length).toBe(1);
+      // and it must come before any use of it — inserting a later candidate's fetch ABOVE an earlier
+      // candidate's bootstrap is a TDZ ReferenceError at runtime, invisible to a syntax-only check
+      const bootstrapPos = rewrittenSource.indexOf("const cimisyReader = createReader");
+      const firstUsePos = rewrittenSource.indexOf("cimisyReader.pages");
+      expect(bootstrapPos).toBeGreaterThan(-1);
+      expect(bootstrapPos).toBeLessThan(firstUsePos);
+      expect(rewrittenSource).toContain("blockContent");
+      expect(rewrittenSource).toContain("careersPageContent");
+      expect(rewrittenSource).toContain("jobItemContent");
+    });
+  });
 });

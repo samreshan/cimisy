@@ -1,5 +1,6 @@
 import ts from "typescript";
 import type { FieldProposal, ProposedFieldKind, CollectionSchemaProposal } from "../scan/infer-schema.js";
+import { objectKeyFor, propertyKeyText } from "./source-edit-utils.js";
 
 export interface InsertCollectionOptions {
   /** Config property key / collection identifier, e.g. "news". */
@@ -40,7 +41,7 @@ function buildCollectionSourceText(options: InsertCollectionOptions, baseIndent:
   ];
 
   return [
-    `${baseIndent}${name}: collection({`,
+    `${baseIndent}${objectKeyFor(name)}: collection({`,
     `${innerIndent}label: ${JSON.stringify(label)},`,
     `${innerIndent}path: ${JSON.stringify(contentPath)},`,
     `${innerIndent}slugField: ${JSON.stringify(proposal.slugField)},`,
@@ -174,9 +175,7 @@ export function insertCollectionIntoConfig(sourceText: string, options: InsertCo
     );
   }
 
-  const nameCollision = collectionsObj.properties.some(
-    (p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === options.name,
-  );
+  const nameCollision = collectionsObj.properties.some((p) => propertyKeyText(p) === options.name);
   if (nameCollision) {
     throw new Error(`cimisy.config.ts already has a collection named "${options.name}".`);
   }

@@ -15,6 +15,8 @@ import {
   expandToFullLines,
   findEnclosingFunction,
   findNodeAtPosition,
+  findReaderBootstrap,
+  isTypeScriptFile,
   lineIndentBefore,
   objectKeyFor,
   propertyAccess,
@@ -74,18 +76,25 @@ function buildFallbackObjectLiteral(fields: StaticFieldProposal[]): string {
 }
 
 function readerGetExpression(readerPath: ReaderPath): string {
-  return readerPath.kind === "singleton"
-    ? `cimisyReader.singletons.${readerPath.key}.get()`
-    : `cimisyReader.pages.${readerPath.pageKey}.${readerPath.sectionKey}.get()`;
+  if (readerPath.kind === "singleton") {
+    return `${propertyAccess("cimisyReader.singletons", readerPath.key)}.get()`;
+  }
+  const pageAccess = propertyAccess("cimisyReader.pages", readerPath.pageKey);
+  return `${propertyAccess(pageAccess, readerPath.sectionKey)}.get()`;
 }
 
-function fetchReplacementLines(indent: string, variableName: string, readerPath: ReaderPath, proposalFields: StaticFieldProposal[]): string {
-  const castType = buildValuesCastType(proposalFields);
+function fetchReplacementLines(
+  indent: string,
+  variableName: string,
+  readerPath: ReaderPath,
+  proposalFields: StaticFieldProposal[],
+  useTypeCast: boolean,
+  skipReaderBootstrap: boolean,
+): string {
   const fallback = buildFallbackObjectLiteral(proposalFields);
-  return [
-    `const cimisyReader = createReader(cimisyConfig);`,
-    `${indent}const ${variableName} = ((await ${readerGetExpression(readerPath)})?.values as ${castType}) ?? ${fallback};`,
-  ].join("\n");
+  const castSuffix = useTypeCast ? ` as ${buildValuesCastType(proposalFields)}` : "";
+  const fetchLine = `const ${variableName} = ((await ${readerGetExpression(readerPath)})?.values${castSuffix}) ?? ${fallback};`;
+  return skipReaderBootstrap ? fetchLine : [`const cimisyReader = createReader(cimisyConfig);`, `${indent}${fetchLine}`].join("\n");
 }
 
 function findJsxElementAtSpan(source: ts.SourceFile, start: number, end: number): JsxElementLike {
@@ -161,6 +170,14 @@ export function rewriteStaticContentSource(options: RewriteStaticContentSourceOp
     throw new Error("Could not find the function that renders this content — refusing to insert an `await` outside a function.");
   }
 
+  const useTypeCast = isTypeScriptFile(filePath);
+  // A function that already hosts an earlier-applied candidate (this same "cimisy import" run applied
+  // another field/section sharing this function first) already has the `cimisyReader` bootstrap line —
+  // inserting it again would be a duplicate `const` declaration, an actual SyntaxError, not just noise.
+  // When that's the case, the new fetch must be anchored right after that existing bootstrap, not at the
+  // block's start (the first candidate's own insertion point) — inserting above it would use
+  // `cimisyReader` before its declaration, a TDZ ReferenceError at runtime.
+  const existingBootstrap = fn.body && ts.isBlock(fn.body) ? findReaderBootstrap(fn, "cimisyReader") : null;
   const structuralEdits: TextEdit[] = [];
   const asyncEdit = buildAsyncEdit(fn, source);
   if (asyncEdit) structuralEdits.push(asyncEdit);
@@ -172,7 +189,7 @@ export function rewriteStaticContentSource(options: RewriteStaticContentSourceOp
   if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) {
     const bodyStart = fn.body.getStart(source);
     const bodyEnd = fn.body.getEnd();
-    const openText = `{\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, readerPath, proposalFields)}\n${innerIndent}return `;
+    const openText = `{\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, readerPath, proposalFields, useTypeCast, false)}\n${innerIndent}return `;
     structuralEdits.push({ start: bodyStart, end: bodyStart, text: openText });
     structuralEdits.push({ start: bodyEnd, end: bodyEnd, text: `;\n${outerIndent}}` });
     insertedBeforeFields += openText.length;
@@ -181,9 +198,9 @@ export function rewriteStaticContentSource(options: RewriteStaticContentSourceOp
     if (!block || !ts.isBlock(block)) {
       throw new Error("Expected a block-bodied function — cannot safely locate an insertion point.");
     }
-    const openBracePos = block.getStart(source) + 1;
-    const insertText = `\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, readerPath, proposalFields)}`;
-    structuralEdits.push({ start: openBracePos, end: openBracePos, text: insertText });
+    const insertPos = existingBootstrap ? existingBootstrap.getEnd() : block.getStart(source) + 1;
+    const insertText = `\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, readerPath, proposalFields, useTypeCast, existingBootstrap !== null)}`;
+    structuralEdits.push({ start: insertPos, end: insertPos, text: insertText });
     insertedBeforeFields += insertText.length;
   }
 

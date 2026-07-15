@@ -9,7 +9,7 @@ import type { FieldDefinition } from "../config/fields/types.js";
 import { writeEntry } from "../content/collection-store.js";
 import { entryPathForSlug } from "../shared/slug.js";
 import { LocalStorageAdapter } from "../storage/local.js";
-import type { LiteralValue } from "./analyze-source.js";
+import { relocateMapUsage, type LiteralValue } from "./analyze-source.js";
 import { detectSource, pathExists } from "./config-detection.js";
 import type { CollectionSchemaProposal, FieldProposal } from "./infer-schema.js";
 import type { CollectionCandidateReport } from "./report.js";
@@ -171,6 +171,24 @@ export async function applyCandidate(options: ApplyCandidateOptions): Promise<Ap
   const isCrossFile = candidate.declarationFile !== candidate.sourceFile;
 
   const sourceText = await readFile(candidate.sourceFile, "utf8");
+  // Re-derive mapCallStart (and, for the same-file case, the declaration's own span) from the text just
+  // read, rather than trusting candidate.mapCallStart/declarationStart/declarationEnd — those were captured
+  // at scan time, and a prior candidate applied earlier in the same "cimisy import" run may have already
+  // edited this same file (deleted a different array's declaration, inserted a fetch), shifting every offset
+  // after its edit. Using stale offsets here doesn't just fail loudly — it splices text at the wrong byte
+  // range, silently corrupting the file. variableName is stable across that edit, so it's what re-locates
+  // this candidate's own `.map()` call (and local declaration) in the fresh text.
+  const relocated = relocateMapUsage(sourceText, candidate.sourceFile, candidate.variableName);
+  if (!relocated) {
+    throw new Error(
+      `Could not find "${candidate.variableName}.map(...)" in ${candidate.sourceFile} anymore — it may have been altered by an earlier candidate applied in this same run. Re-run "cimisy scan" and try again.`,
+    );
+  }
+  if (!isCrossFile && !relocated.localDeclaration) {
+    throw new Error(
+      `Could not find "${candidate.variableName}"'s own declaration in ${candidate.sourceFile} anymore — it may have been altered by an earlier candidate applied in this same run. Re-run "cimisy scan" and try again.`,
+    );
+  }
   const rewritten = rewriteArraySource({
     sourceText,
     filePath: candidate.sourceFile,
@@ -178,11 +196,18 @@ export async function applyCandidate(options: ApplyCandidateOptions): Promise<Ap
     variableName: candidate.variableName,
     collectionName,
     fields: candidate.proposal.fields,
-    mapCallStart: candidate.mapCallStart,
-    ...(isCrossFile ? {} : { declarationStart: candidate.declarationStart, declarationEnd: candidate.declarationEnd }),
+    mapCallStart: relocated.mapCallStart,
+    ...(isCrossFile ? {} : relocated.localDeclaration!),
   });
   await writeFile(candidate.sourceFile, rewritten, "utf8");
 
+  // Note: declarationStart/declarationEnd here are NOT re-derived the way sourceFile's offsets above are —
+  // unlike variableName (stable across an edit), the array's *exported* name in declarationFile isn't
+  // reliably recoverable from the candidate alone (an aliased import, `import { leaders as team }`, means
+  // variableName ("team") differs from what's actually declared there ("leaders")). This is safe for the
+  // common case (each candidate's declarationFile is only ever touched once per run), but two DIFFERENT
+  // candidates sharing one data module (e.g. two arrays both exported from the same leadership.js) can still
+  // go stale the same way sourceFile's offsets used to — a known gap, not yet fixed.
   let rewrittenDeclarationFile: string | undefined;
   if (isCrossFile) {
     if (candidate.declarationFile.endsWith(".json")) {
