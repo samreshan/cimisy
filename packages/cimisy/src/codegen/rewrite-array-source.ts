@@ -24,9 +24,18 @@ export interface RewriteArraySourceOptions {
   collectionName: string;
   /** The collection's inferred fields (NOT including the synthesized slug) — used to type-cast `entry.values` back to the shape the pre-existing JSX already expects, since a Reader entry's `values` is `Record<string, unknown>` at the type level even though every field here is actually a string/string[] at runtime. */
   fields: FieldProposal[];
-  /** Char offsets of the `const X = [...]` statement, as captured by findRepeatingContent against THIS SAME sourceText (stale offsets from a re-scanned/edited file produce corrupted output). */
-  declarationStart: number;
-  declarationEnd: number;
+  /**
+   * Char offsets of the `const X = [...]` statement, as captured by
+   * findRepeatingContent against THIS SAME sourceText (stale offsets from
+   * a re-scanned/edited file produce corrupted output). Omit both when the
+   * array is declared in a different module than this one (a
+   * RepeatingContentCandidate whose declarationFile !== sourceFile) — that
+   * module's declaration is deleted separately by the caller via
+   * deleteArrayDeclaration, and this rewrite instead removes the stale
+   * import of `variableName` from this file.
+   */
+  declarationStart?: number;
+  declarationEnd?: number;
   /** Char offset of the `X.map(` call — see analyze-source.ts's RepeatingContentCandidate for why this, not declarationStart, locates the function to rewrite. */
   mapCallStart: number;
 }
@@ -47,11 +56,22 @@ function buildValuesCastType(fieldsProposal: FieldProposal[]): string {
   return `{ ${fieldsProposal.map((f) => `${f.name}: ${tsTypeForField(f.proposedKind)}`).join("; ")} }`;
 }
 
-function fetchReplacementLines(indent: string, variableName: string, collectionName: string, fieldsProposal: FieldProposal[]): string {
-  const castType = buildValuesCastType(fieldsProposal);
+/** `as {...}` type assertions are TypeScript-only syntax — inserting one into a plain .js/.jsx file (a valid App Router page/component shape) would leave behind code that fails to even parse. */
+function isTypeScriptFile(filePath: string): boolean {
+  return /\.tsx?$/.test(filePath);
+}
+
+function fetchReplacementLines(
+  indent: string,
+  variableName: string,
+  collectionName: string,
+  fieldsProposal: FieldProposal[],
+  useTypeCast: boolean,
+): string {
+  const castSuffix = useTypeCast ? ` as ${buildValuesCastType(fieldsProposal)}` : "";
   return [
     `const cimisyReader = createReader(cimisyConfig);`,
-    `${indent}const ${variableName} = (await cimisyReader.collections.${collectionName}.all()).map((entry) => entry.values as ${castType});`,
+    `${indent}const ${variableName} = (await cimisyReader.collections.${collectionName}.all()).map((entry) => entry.values${castSuffix});`,
   ].join("\n");
 }
 
@@ -70,6 +90,7 @@ function buildBodyInsertEdit(
   variableName: string,
   collectionName: string,
   fieldsProposal: FieldProposal[],
+  useTypeCast: boolean,
 ): TextEdit {
   const outerIndent = lineIndentBefore(sourceText, fn.getStart(source));
   const innerIndent = `${outerIndent}  `;
@@ -78,7 +99,7 @@ function buildBodyInsertEdit(
     const bodyStart = fn.body.getStart(source);
     const bodyEnd = fn.body.getEnd();
     const originalBodyText = sourceText.slice(bodyStart, bodyEnd);
-    const text = `{\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, collectionName, fieldsProposal)}\n${innerIndent}return ${originalBodyText};\n${outerIndent}}`;
+    const text = `{\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, collectionName, fieldsProposal, useTypeCast)}\n${innerIndent}return ${originalBodyText};\n${outerIndent}}`;
     return { start: bodyStart, end: bodyEnd, text };
   }
 
@@ -90,14 +111,46 @@ function buildBodyInsertEdit(
   return {
     start: openBracePos,
     end: openBracePos,
-    text: `\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, collectionName, fieldsProposal)}`,
+    text: `\n${innerIndent}${fetchReplacementLines(innerIndent, variableName, collectionName, fieldsProposal, useTypeCast)}`,
   };
+}
+
+/** Deletes just an array's own declaration statement — used to rewrite a candidate's declarationFile when it's a different module than the one rewriteArraySource is handling (see RewriteArraySourceOptions). */
+export function deleteArrayDeclaration(sourceText: string, declarationStart: number, declarationEnd: number): string {
+  const { start, end } = expandToFullLines(sourceText, declarationStart, declarationEnd);
+  return sourceText.slice(0, start) + sourceText.slice(end);
+}
+
+/** Removes the named-import specifier binding `localName` (dropping the whole import statement if it was the only specifier and there's no default import alongside it) — the cross-file counterpart of deleting a local declaration, since `variableName` is no longer available as an import once its source array is gone. Leaves sourceText untouched if no matching import is found (shouldn't normally happen; findRepeatingContent only takes this path after finding exactly this import). */
+function removeNamedImportSpecifier(sourceText: string, filePath: string, localName: string): string {
+  const source = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement) || !statement.importClause) continue;
+    const namedBindings = statement.importClause.namedBindings;
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) continue;
+    const elements = namedBindings.elements;
+    const idx = elements.findIndex((el) => el.name.text === localName);
+    if (idx === -1) continue;
+
+    if (elements.length === 1 && !statement.importClause.name) {
+      const { start, end } = expandToFullLines(sourceText, statement.getStart(source), statement.getEnd());
+      return sourceText.slice(0, start) + sourceText.slice(end);
+    }
+    const target = elements[idx]!;
+    const isLast = idx === elements.length - 1;
+    const start = isLast ? elements[idx - 1]!.getEnd() : target.getStart(source);
+    const end = isLast ? target.getEnd() : elements[idx + 1]!.getStart(source);
+    return sourceText.slice(0, start) + sourceText.slice(end);
+  }
+  return sourceText;
 }
 
 /**
  * The safe array->fetch swap: removes the `const X = [...]` array
- * declaration and inserts, inside the function that actually consumes it
- * via `.map()`, a fetch producing the exact same flat per-item shape
+ * declaration (or, when it lives in a different module — see
+ * declarationStart/declarationEnd's doc comment — the stale import of it)
+ * and inserts, inside the function that actually consumes it via
+ * `.map()`, a fetch producing the exact same flat per-item shape
  * (`entry.values`, not cimisy's `{slug, version, values, error?}`
  * wrapper) — so the pre-existing `.map()` call and all JSX downstream of
  * it never need to be touched. Marks that function async if needed, and
@@ -116,13 +169,21 @@ export function rewriteArraySource(options: RewriteArraySourceOptions): string {
     );
   }
 
-  const edits: TextEdit[] = [buildBodyInsertEdit(fn, source, sourceText, variableName, collectionName, fields)];
+  const edits: TextEdit[] = [
+    buildBodyInsertEdit(fn, source, sourceText, variableName, collectionName, fields, isTypeScriptFile(filePath)),
+  ];
   const asyncEdit = buildAsyncEdit(fn, source);
   if (asyncEdit) edits.push(asyncEdit);
-  const deletion = expandToFullLines(sourceText, declarationStart, declarationEnd);
-  edits.push({ start: deletion.start, end: deletion.end, text: "" });
+  const hasLocalDeclaration = declarationStart !== undefined && declarationEnd !== undefined;
+  if (hasLocalDeclaration) {
+    const deletion = expandToFullLines(sourceText, declarationStart, declarationEnd);
+    edits.push({ start: deletion.start, end: deletion.end, text: "" });
+  }
 
-  const afterEdits = applyEdits(sourceText, edits);
+  let afterEdits = applyEdits(sourceText, edits);
+  if (!hasLocalDeclaration) {
+    afterEdits = removeNamedImportSpecifier(afterEdits, filePath, variableName);
+  }
 
   const configImportSpecifier = toImportSpecifier(filePath, configFilePath);
   const withReaderImport = ensureNamedImport(afterEdits, "cimisy/next", ["createReader"]);

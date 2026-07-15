@@ -162,6 +162,70 @@ describe("applyCandidate", () => {
     expect(sourceUnchanged).toContain('const articles = [{ title: "A" }];');
   });
 
+  it("rewrites both files when the array lives in a separate data module (leadership.js shape)", async () => {
+    await mkdir(path.join(appDir, "data"), { recursive: true });
+    const dataFile = path.join(appDir, "data", "leadership.js");
+    await writeFile(
+      dataFile,
+      `export const leaders = [
+        { name: "A", title: "CEO" },
+        { name: "B", title: "COO" },
+      ];`,
+    );
+    const componentFile = path.join(appDir, "components", "leadership", "LeadershipGrid.jsx");
+    await mkdir(path.dirname(componentFile), { recursive: true });
+    await writeFile(
+      componentFile,
+      `
+        import { leaders } from "../../data/leadership";
+        export function LeadershipGrid() {
+          return <div>{leaders.map((member) => <Card key={member.name} name={member.name} title={member.title} />)}</div>;
+        }
+      `,
+    );
+    await mkdir(path.join(appDir, "leadership"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "leadership", "page.js"),
+      `
+        import { LeadershipGrid } from "../components/leadership/LeadershipGrid";
+        export default function Page() { return <LeadershipGrid />; }
+      `,
+    );
+
+    const report = await runScan({ appDir, projectRoot: root });
+    expect(report.collectionCandidates).toHaveLength(1);
+    const candidate = report.collectionCandidates[0]!;
+
+    const result = await applyCandidate({
+      candidate,
+      configFilePath,
+      collectionName: "leadership",
+      collectionLabel: "Leadership",
+      contentPath: "leadership/*.mdx",
+    });
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items.every((i) => !i.error)).toBe(true);
+    expect(result.rewrittenSourceFile).toBe(componentFile);
+    expect(result.rewrittenDeclarationFile).toBe(dataFile);
+
+    // data module: the array declaration is gone
+    const rewrittenData = await readFile(dataFile, "utf8");
+    assertNoSyntaxErrors(rewrittenData);
+    expect(rewrittenData).not.toContain("leaders");
+    expect(rewrittenData).not.toContain("CEO");
+
+    // component file: stale import gone, fetch inserted, JSX untouched, still compiles
+    const rewrittenComponent = await readFile(componentFile, "utf8");
+    assertNoSyntaxErrors(rewrittenComponent);
+    expect(rewrittenComponent).not.toContain("../../data/leadership");
+    expect(rewrittenComponent).toContain("cimisyReader.collections.leadership.all()");
+    expect(rewrittenComponent).toContain(
+      "return <div>{leaders.map((member) => <Card key={member.name} name={member.name} title={member.title} />)}</div>;",
+    );
+    expect(rewrittenComponent).toContain("export async function LeadershipGrid()");
+  });
+
   it("isolates a per-item write failure instead of aborting the whole import", async () => {
     await writeFile(
       path.join(appDir, "news", "page.tsx"),

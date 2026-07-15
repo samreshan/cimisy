@@ -9,16 +9,19 @@ import { assertKeyAllowed, deriveKey, inferStaticSchema, type StaticSchemaPropos
 
 export interface CollectionCandidateReport {
   variableName: string;
+  /** The file whose `.map()` call consumes this array. */
   sourceFile: string;
+  /** The file the array is actually declared in — see analyze-source.ts's RepeatingContentCandidate.declarationFile. Equal to sourceFile except when the array lives in its own data module. */
+  declarationFile: string;
   /** The JSX section (component name) that owns this array, or "page" if it's declared directly in a page file. */
   section: string;
   itemCount: number;
   proposal: CollectionSchemaProposal;
   items: Array<Record<string, LiteralValue>>;
-  /** Char offsets of the array's `const X = [...]` statement in sourceFile, for the Milestone B codemod. */
+  /** Char offsets of the array's `const X = [...]` statement in declarationFile, for the Milestone B codemod. */
   declarationStart: number;
   declarationEnd: number;
-  /** Char offset of the `X.map(` call that consumes this array — see analyze-source.ts's RepeatingContentCandidate. */
+  /** Char offset of the `X.map(` call that consumes this array, in sourceFile — see analyze-source.ts's RepeatingContentCandidate. */
   mapCallStart: number;
   /** Routes that render this candidate, directly or via a shared component (e.g. a Navbar array appears on every route that renders <Navbar/>). */
   usedOnRoutes: string[];
@@ -27,6 +30,7 @@ export interface CollectionCandidateReport {
 export interface UnanalyzableReport {
   variableName: string;
   sourceFile: string;
+  declarationFile: string;
   section: string;
   reason: string;
   usedOnRoutes: string[];
@@ -146,10 +150,15 @@ export async function runScan(options: RunScanOptions): Promise<ScanReport> {
 
     for (const [file, sectionLabel] of filesToScan) {
       const text = await readCached(file);
-      const result = findRepeatingContent(text, file);
+      const result = await findRepeatingContent(text, file, {
+        pathAliases: options.pathAliases,
+        projectRoot: options.projectRoot,
+      });
 
       for (const candidate of result.repeatingContent) {
-        const key = `${candidate.sourceFile}::${candidate.variableName}`;
+        // Keyed by declarationFile (not sourceFile): a data module's array shared by
+        // several components (each with its own .map() call/sourceFile) is one candidate.
+        const key = `${candidate.declarationFile}::${candidate.variableName}`;
         const existing = candidatesByKey.get(key);
         if (existing) {
           if (!existing.usedOnRoutes.includes(routePath)) existing.usedOnRoutes.push(routePath);
@@ -158,6 +167,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanReport> {
         candidatesByKey.set(key, {
           variableName: candidate.variableName,
           sourceFile: candidate.sourceFile,
+          declarationFile: candidate.declarationFile,
           section: sectionLabel,
           itemCount: candidate.items.length,
           proposal: inferSchema(candidate.items),
@@ -169,7 +179,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanReport> {
         });
       }
       for (const candidate of result.unanalyzable) {
-        const key = `${candidate.sourceFile}::${candidate.variableName}`;
+        const key = `${candidate.declarationFile}::${candidate.variableName}`;
         const existing = unanalyzableByKey.get(key);
         if (existing) {
           if (!existing.usedOnRoutes.includes(routePath)) existing.usedOnRoutes.push(routePath);
@@ -309,6 +319,13 @@ function formatRoutes(routes: string[]): string {
   return routes.length <= 3 ? routes.join(", ") : `${routes.slice(0, 3).join(", ")}, +${routes.length - 3} more`;
 }
 
+/** "(news/page.tsx)" for the common same-file case, "(components/Grid.tsx, declared in data/leaders.ts)" when the array's own declaration lives in a different module (see analyze-source.ts's cross-file resolution). */
+function formatLocation(appDir: string, sourceFile: string, declarationFile: string): string {
+  const rel = path.relative(appDir, sourceFile);
+  if (declarationFile === sourceFile) return rel;
+  return `${rel}, declared in ${path.relative(appDir, declarationFile)}`;
+}
+
 export function printScanReport(report: ScanReport): string {
   const staticContentCandidates = report.staticContentCandidates ?? [];
   const staticUnanalyzable = report.staticUnanalyzable ?? [];
@@ -327,9 +344,9 @@ export function printScanReport(report: ScanReport): string {
   if (report.collectionCandidates.length > 0) {
     lines.push("Collection candidates:");
     for (const candidate of report.collectionCandidates) {
-      const rel = path.relative(report.appDir, candidate.sourceFile);
+      const location = formatLocation(report.appDir, candidate.sourceFile, candidate.declarationFile);
       lines.push(
-        `  [${candidate.section}] ${candidate.variableName}  (${rel})  — ${candidate.itemCount} items, used on ${formatRoutes(candidate.usedOnRoutes)}`,
+        `  [${candidate.section}] ${candidate.variableName}  (${location})  — ${candidate.itemCount} items, used on ${formatRoutes(candidate.usedOnRoutes)}`,
       );
       for (const field of candidate.proposal.fields) {
         const flags = [field.optional ? "optional" : null, field.note ?? null].filter(Boolean).join("; ");
@@ -342,8 +359,8 @@ export function printScanReport(report: ScanReport): string {
     if (lines.length > 0) lines.push("");
     lines.push("Detected but not import-eligible:");
     for (const item of report.unanalyzable) {
-      const rel = path.relative(report.appDir, item.sourceFile);
-      lines.push(`  [${item.section}] ${item.variableName}  (${rel})  — ${item.reason}  (used on ${formatRoutes(item.usedOnRoutes)})`);
+      const location = formatLocation(report.appDir, item.sourceFile, item.declarationFile);
+      lines.push(`  [${item.section}] ${item.variableName}  (${location})  — ${item.reason}  (used on ${formatRoutes(item.usedOnRoutes)})`);
     }
   }
 

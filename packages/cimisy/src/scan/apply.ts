@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { humanizeLabel, insertCollectionIntoConfig, scaffoldConfigFile } from "../codegen/insert-collection-config.js";
-import { rewriteArraySource } from "../codegen/rewrite-array-source.js";
+import { deleteArrayDeclaration, rewriteArraySource } from "../codegen/rewrite-array-source.js";
 import { collection } from "../config/collection.js";
 import type { NormalizedCollection } from "../config/define-config.js";
 import { fields } from "../config/fields/index.js";
@@ -37,6 +37,8 @@ export interface ApplyCandidateResult {
   configFileCreated: boolean;
   items: ApplyItemResult[];
   rewrittenSourceFile: string;
+  /** Present only when the candidate's array lived in a different module than its `.map()` call (declarationFile !== sourceFile) — that module's now-unused declaration was deleted here too. */
+  rewrittenDeclarationFile?: string;
 }
 
 function buildRuntimeField(field: FieldProposal, collectionName: string): FieldDefinition {
@@ -163,6 +165,11 @@ export async function applyCandidate(options: ApplyCandidateOptions): Promise<Ap
     }
   }
 
+  // The array's declaration and its .map() usage are usually the same file (declarationFile === sourceFile) —
+  // but when the array was factored into its own data module, they're not (see analyze-source.ts's
+  // RepeatingContentCandidate.declarationFile); that module's declaration is then deleted separately below.
+  const isCrossFile = candidate.declarationFile !== candidate.sourceFile;
+
   const sourceText = await readFile(candidate.sourceFile, "utf8");
   const rewritten = rewriteArraySource({
     sourceText,
@@ -171,11 +178,18 @@ export async function applyCandidate(options: ApplyCandidateOptions): Promise<Ap
     variableName: candidate.variableName,
     collectionName,
     fields: candidate.proposal.fields,
-    declarationStart: candidate.declarationStart,
-    declarationEnd: candidate.declarationEnd,
     mapCallStart: candidate.mapCallStart,
+    ...(isCrossFile ? {} : { declarationStart: candidate.declarationStart, declarationEnd: candidate.declarationEnd }),
   });
   await writeFile(candidate.sourceFile, rewritten, "utf8");
+
+  let rewrittenDeclarationFile: string | undefined;
+  if (isCrossFile) {
+    const declarationText = await readFile(candidate.declarationFile, "utf8");
+    const rewrittenDeclaration = deleteArrayDeclaration(declarationText, candidate.declarationStart, candidate.declarationEnd);
+    await writeFile(candidate.declarationFile, rewrittenDeclaration, "utf8");
+    rewrittenDeclarationFile = candidate.declarationFile;
+  }
 
   return {
     collectionName,
@@ -183,5 +197,6 @@ export async function applyCandidate(options: ApplyCandidateOptions): Promise<Ap
     configFileCreated: !configExisted,
     items,
     rewrittenSourceFile: candidate.sourceFile,
+    ...(rewrittenDeclarationFile ? { rewrittenDeclarationFile } : {}),
   };
 }

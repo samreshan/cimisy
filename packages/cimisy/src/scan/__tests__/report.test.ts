@@ -72,6 +72,47 @@ describe("runScan", () => {
     expect(candidate.variableName).toBe("pillars");
   });
 
+  it("follows an array imported from its own data module, one hop past the rendering component (leadership.js shape)", async () => {
+    await mkdir(path.join(appDir, "data"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "data", "leadership.js"),
+      `export const leaders = [
+        { name: "A", title: "CEO" },
+        { name: "B", title: "COO" },
+      ];`,
+    );
+    await mkdir(path.join(appDir, "components", "leadership"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "components", "leadership", "LeadershipGrid.jsx"),
+      `
+        import { leaders } from "../../data/leadership";
+        export function LeadershipGrid() {
+          return <div>{leaders.map((member) => <Card key={member.name} name={member.name} />)}</div>;
+        }
+      `,
+    );
+    await mkdir(path.join(appDir, "leadership"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "leadership", "page.js"),
+      `
+        import { LeadershipGrid } from "../components/leadership/LeadershipGrid";
+        export default function Page() { return <LeadershipGrid />; }
+      `,
+    );
+
+    const report = await runScan({ appDir, projectRoot: root });
+    expect(report.collectionCandidates).toHaveLength(1);
+    const candidate = report.collectionCandidates[0]!;
+    expect(candidate.variableName).toBe("leaders");
+    expect(candidate.section).toBe("LeadershipGrid");
+    expect(candidate.sourceFile).toBe(path.join(appDir, "components", "leadership", "LeadershipGrid.jsx"));
+    expect(candidate.declarationFile).toBe(path.join(appDir, "data", "leadership.js"));
+    expect(candidate.items).toEqual([
+      { name: "A", title: "CEO" },
+      { name: "B", title: "COO" },
+    ]);
+  });
+
   it("deduplicates a shared component's array across every page that renders it (SIA's Navbar scenario)", async () => {
     await mkdir(path.join(root, "src", "components"), { recursive: true });
     await writeFile(
@@ -202,6 +243,32 @@ describe("printScanReport", () => {
     expect(text).toContain("date: text");
     expect(text).toContain("looks like a date");
     expect(text).toContain("used on /");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("notes where a cross-file candidate's array is actually declared", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "cimisy-print-cross-file-"));
+    const appDir = path.join(root, "app");
+    await mkdir(path.join(appDir, "data"), { recursive: true });
+    await writeFile(path.join(appDir, "data", "leadership.js"), `export const leaders = [{ name: "A" }];`);
+    await mkdir(path.join(appDir, "components"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "components", "LeadershipGrid.jsx"),
+      `
+        import { leaders } from "../data/leadership";
+        export function LeadershipGrid() { return <div>{leaders.map(l => <p key={l.name} />)}</div>; }
+      `,
+    );
+    await writeFile(
+      path.join(appDir, "page.js"),
+      `
+        import { LeadershipGrid } from "./components/LeadershipGrid";
+        export default function Page() { return <LeadershipGrid />; }
+      `,
+    );
+    const report = await runScan({ appDir, projectRoot: root });
+    const text = printScanReport(report);
+    expect(text).toContain("components/LeadershipGrid.jsx, declared in data/leadership.js");
     await rm(root, { recursive: true, force: true });
   });
 
