@@ -186,4 +186,34 @@ describe("findStaticContent", () => {
     expect(result.staticContent).toEqual([]);
     expect(result.unanalyzable).toEqual([]);
   });
+
+  describe('"use client" files', () => {
+    it("reports an otherwise-valid region as unanalyzable instead of offering it for import (createReader is server-only)", () => {
+      const source = `
+        "use client";
+        export default function Nav() {
+          return <nav id="nav"><h1>Welcome</h1></nav>;
+        }
+      `;
+      const result = findStaticContent(source, "/app/components/Nav.jsx");
+      expect(result.staticContent).toEqual([]);
+      expect(result.unanalyzable).toHaveLength(1);
+      expect(result.unanalyzable[0]!.regionHint).toBe("nav");
+      expect(result.unanalyzable[0]!.reason).toMatch(/Client Component/);
+      expect(result.unanalyzable[0]!.reason).toMatch(/server-only/);
+    });
+
+    it('does not treat a "use client" string appearing after the first statement as the directive', () => {
+      const source = `
+        import { useState } from "react";
+        "use client";
+        export default function Nav() {
+          return <nav id="nav"><h1>Welcome</h1></nav>;
+        }
+      `;
+      const result = findStaticContent(source, "/app/components/Nav.jsx");
+      expect(result.staticContent).toHaveLength(1);
+      expect(result.unanalyzable).toEqual([]);
+    });
+  });
 });

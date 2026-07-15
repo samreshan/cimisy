@@ -235,6 +235,28 @@ describe("runScan", () => {
     expect(report.unanalyzable[0]!.section).toBe("page");
     expect(report.unanalyzable[0]!.usedOnRoutes).toEqual(["/"]);
   });
+
+  it('never offers a "use client" component\'s array for import — createReader is server-only', async () => {
+    await mkdir(path.join(root, "src", "components"), { recursive: true });
+    await writeFile(
+      path.join(root, "src", "components", "Nav.jsx"),
+      `
+        "use client";
+        const links = [{ label: "Home", href: "/" }, { label: "About", href: "/about" }];
+        export function Nav() { return <nav>{links.map(l => <a key={l.href} href={l.href}>{l.label}</a>)}</nav>; }
+      `,
+    );
+    await writeFile(
+      path.join(appDir, "page.tsx"),
+      `import { Nav } from "@/components/Nav"; export default function Page() { return <Nav />; }`,
+    );
+
+    const report = await runScan({ appDir, projectRoot: root, pathAliases: { "@/*": "./src/*" } });
+    expect(report.collectionCandidates).toEqual([]);
+    expect(report.unanalyzable).toHaveLength(1);
+    expect(report.unanalyzable[0]!.variableName).toBe("links");
+    expect(report.unanalyzable[0]!.reason).toMatch(/Client Component/);
+  });
 });
 
 describe("runScan — static content (--full)", () => {

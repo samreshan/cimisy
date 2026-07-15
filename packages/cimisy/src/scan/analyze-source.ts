@@ -1,6 +1,7 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
+import { hasUseClientDirective, USE_CLIENT_UNANALYZABLE_REASON } from "./directives.js";
 
 export type LiteralValue = string | number | boolean | null | LiteralValue[];
 
@@ -341,6 +342,21 @@ export async function findRepeatingContent(
       declarationEnd,
       mapCallStart,
     });
+  }
+
+  // createReader (cimisy/next) is server-only and its rewrite always makes the enclosing component async —
+  // neither is possible in a Client Component. Report what WOULD have been importable instead of silently
+  // crashing the app that runs the codemod's output (see directives.ts).
+  if (repeatingContent.length > 0 && hasUseClientDirective(source)) {
+    for (const candidate of repeatingContent) {
+      unanalyzable.push({
+        variableName: candidate.variableName,
+        sourceFile: candidate.sourceFile,
+        declarationFile: candidate.declarationFile,
+        reason: USE_CLIENT_UNANALYZABLE_REASON,
+      });
+    }
+    repeatingContent.length = 0;
   }
 
   return { repeatingContent, unanalyzable };

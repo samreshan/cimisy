@@ -85,8 +85,26 @@ function inferField(name: string, values: LiteralValue[], presentOnEveryItem: bo
     return { name, sourceKind, optional, proposedKind: "text" };
   }
 
-  if (sourceKind === "number" || sourceKind === "boolean") {
-    return { name, sourceKind, optional, proposedKind: "text", note: `values are ${sourceKind}s and will be stored as text` };
+  if (sourceKind === "number") {
+    return { name, sourceKind, optional, proposedKind: "text", note: "values are numbers and will be stored as text" };
+  }
+
+  if (sourceKind === "boolean") {
+    // Unlike a number, a boolean stringified as "true"/"false" is NOT display-safe: cimisy has no
+    // fields.boolean(), so the stored value becomes a string either way, and "false" is just as
+    // truthy as "true" in JS — any pre-existing `{field && <X/>}` check on the original boolean
+    // would render for BOTH values once migrated, silently inverting whatever `false` meant. This
+    // has to be called out distinctly from the number case, not folded into the same generic note.
+    return {
+      name,
+      sourceKind,
+      optional,
+      proposedKind: "text",
+      note:
+        'values are booleans and will be stored as literal text ("true"/"false") — cimisy has no boolean field type. ' +
+        "Any code doing a truthy check on this field (e.g. `{field && <X/>}`) must be updated to compare the string " +
+        'explicitly (e.g. `field === "true"`) after importing, or it will render for both values.',
+    };
   }
 
   if (sourceKind === "null") {

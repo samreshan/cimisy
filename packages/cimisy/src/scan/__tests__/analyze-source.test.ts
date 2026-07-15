@@ -303,6 +303,38 @@ describe("findRepeatingContent", () => {
       expect(result.unanalyzable).toEqual([]);
     });
   });
+
+  describe('"use client" files', () => {
+    it("reports an otherwise-valid array as unanalyzable instead of offering it for import (createReader is server-only)", async () => {
+      const source = `
+        "use client";
+        const articles = [
+          { title: "A", date: "April 2026" },
+          { title: "B", date: "March 2026" },
+        ];
+        export default function NewsPage() {
+          return <div>{articles.map((a, i) => <Card key={i} title={a.title} />)}</div>;
+        }
+      `;
+      const result = await findRepeatingContent(source, "/app/news/page.tsx");
+      expect(result.repeatingContent).toEqual([]);
+      expect(result.unanalyzable).toHaveLength(1);
+      expect(result.unanalyzable[0]!.variableName).toBe("articles");
+      expect(result.unanalyzable[0]!.reason).toMatch(/Client Component/);
+      expect(result.unanalyzable[0]!.reason).toMatch(/server-only/);
+    });
+
+    it('does not treat a "use client" string appearing after the first statement as the directive', async () => {
+      const source = `
+        const articles = [{ title: "A" }];
+        "use client";
+        export default function Page() { return <div>{articles.map(a => <p key={a.title}>{a.title}</p>)}</div>; }
+      `;
+      const result = await findRepeatingContent(source, "/app/page.tsx");
+      expect(result.repeatingContent).toHaveLength(1);
+      expect(result.unanalyzable).toEqual([]);
+    });
+  });
 });
 
 describe("findJsxSections", () => {

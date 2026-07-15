@@ -49,17 +49,25 @@ describe("inferSchema", () => {
     expect(title.optional).toBe(false);
   });
 
-  it("coerces numbers and booleans to text with an explanatory note", () => {
-    const proposal = inferSchema([
-      { title: "A", priority: 1, featured: true },
-      { title: "B", priority: 2, featured: false },
-    ]);
+  it("coerces numbers to text with a plain explanatory note", () => {
+    const proposal = inferSchema([{ title: "A", priority: 1 }, { title: "B", priority: 2 }]);
     const priority = proposal.fields.find((f) => f.name === "priority")!;
     expect(priority.proposedKind).toBe("text");
     expect(priority.sourceKind).toBe("number");
     expect(priority.note).toMatch(/numbers/);
+  });
+
+  it("coerces booleans to text with a distinct warning about truthy-check breakage — not the same note as numbers", () => {
+    const proposal = inferSchema([
+      { title: "A", featured: true },
+      { title: "B", featured: false },
+    ]);
     const featured = proposal.fields.find((f) => f.name === "featured")!;
+    expect(featured.proposedKind).toBe("text");
     expect(featured.sourceKind).toBe("boolean");
+    // display-safety warning that numbers don't need: stringified "false" is truthy in JS
+    expect(featured.note).toMatch(/truthy/);
+    expect(featured.note).not.toMatch(/^values are booleans and will be stored as text$/);
   });
 
   it("flags mixed-type values across items rather than guessing", () => {

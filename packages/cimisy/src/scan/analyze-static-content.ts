@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { hasUseClientDirective, USE_CLIENT_UNANALYZABLE_REASON } from "./directives.js";
 import type { InlineNode } from "../mdx/inline.js";
 
 export type StaticFieldValue =
@@ -368,6 +369,22 @@ export function findStaticContent(sourceText: string, filePath: string): StaticC
     if (region.fields.length > 0) {
       staticContent.push({ sourceFile: filePath, regionHint: region.hint, regionStart: region.start, regionEnd: region.end, fields: region.fields });
     }
+  }
+
+  // createReader (cimisy/next) is server-only and its rewrite always makes the enclosing component async —
+  // neither is possible in a Client Component. Report what WOULD have been importable instead of silently
+  // crashing the app that runs the codemod's output (see directives.ts).
+  if (staticContent.length > 0 && hasUseClientDirective(source)) {
+    for (const region of staticContent) {
+      unanalyzable.push({
+        sourceFile: region.sourceFile,
+        regionHint: region.regionHint,
+        reason: USE_CLIENT_UNANALYZABLE_REASON,
+        nodeStart: region.regionStart,
+        nodeEnd: region.regionEnd,
+      });
+    }
+    staticContent.length = 0;
   }
 
   return { staticContent, unanalyzable };
