@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import ts from "typescript";
@@ -224,6 +224,57 @@ describe("applyCandidate", () => {
       "return <div>{leaders.map((member) => <Card key={member.name} name={member.name} title={member.title} />)}</div>;",
     );
     expect(rewrittenComponent).toContain("export async function LeadershipGrid()");
+  });
+
+  it("deletes the .json data module outright instead of leaving an empty invalid file (about-timeline.json shape)", async () => {
+    await mkdir(path.join(appDir, "data"), { recursive: true });
+    const dataFile = path.join(appDir, "data", "about-timeline.json");
+    await writeFile(dataFile, JSON.stringify([{ year: "2020", title: "Founded" }, { year: "2022", title: "Series A" }]));
+    const componentFile = path.join(appDir, "components", "about", "AboutJourney.jsx");
+    await mkdir(path.dirname(componentFile), { recursive: true });
+    await writeFile(
+      componentFile,
+      `
+        import chaptersRaw from "../../data/about-timeline.json";
+        export function AboutJourney() {
+          return <div>{chaptersRaw.map((c) => <li key={c.year}>{c.title}</li>)}</div>;
+        }
+      `,
+    );
+    await mkdir(path.join(appDir, "about"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "about", "page.js"),
+      `
+        import { AboutJourney } from "../components/about/AboutJourney";
+        export default function Page() { return <AboutJourney />; }
+      `,
+    );
+
+    const report = await runScan({ appDir, projectRoot: root });
+    expect(report.collectionCandidates).toHaveLength(1);
+    const candidate = report.collectionCandidates[0]!;
+    expect(candidate.declarationFile).toBe(dataFile);
+
+    const result = await applyCandidate({
+      candidate,
+      configFilePath,
+      collectionName: "timeline",
+      collectionLabel: "Timeline",
+      contentPath: "timeline/*.mdx",
+    });
+
+    expect(result.items).toHaveLength(2);
+    expect(result.rewrittenDeclarationFile).toBe(dataFile);
+
+    // the .json data module is gone entirely, not left behind as an empty/invalid file
+    await expect(access(dataFile)).rejects.toThrow();
+
+    // component file: stale default import gone, fetch inserted, JSX untouched, still compiles
+    const rewrittenComponent = await readFile(componentFile, "utf8");
+    assertNoSyntaxErrors(rewrittenComponent);
+    expect(rewrittenComponent).not.toContain("about-timeline.json");
+    expect(rewrittenComponent).toContain("cimisyReader.collections.timeline.all()");
+    expect(rewrittenComponent).toContain("return <div>{chaptersRaw.map((c) => <li key={c.year}>{c.title}</li>)}</div>;");
   });
 
   it("isolates a per-item write failure instead of aborting the whole import", async () => {

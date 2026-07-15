@@ -121,11 +121,30 @@ export function deleteArrayDeclaration(sourceText: string, declarationStart: num
   return sourceText.slice(0, start) + sourceText.slice(end);
 }
 
-/** Removes the named-import specifier binding `localName` (dropping the whole import statement if it was the only specifier and there's no default import alongside it) — the cross-file counterpart of deleting a local declaration, since `variableName` is no longer available as an import once its source array is gone. Leaves sourceText untouched if no matching import is found (shouldn't normally happen; findRepeatingContent only takes this path after finding exactly this import). */
-function removeNamedImportSpecifier(sourceText: string, filePath: string, localName: string): string {
+/** Removes the default-import binding `localName` (dropping the whole import statement if there are no named specifiers alongside it, otherwise just the `X,` / `, X` default clause) — the default-import counterpart of the named-specifier removal below. */
+function removeDefaultImportBinding(sourceText: string, source: ts.SourceFile, statement: ts.ImportDeclaration): string {
+  const { importClause } = statement;
+  const namedBindings = importClause!.namedBindings;
+  if (!namedBindings || (ts.isNamedImports(namedBindings) && namedBindings.elements.length === 0)) {
+    const { start, end } = expandToFullLines(sourceText, statement.getStart(source), statement.getEnd());
+    return sourceText.slice(0, start) + sourceText.slice(end);
+  }
+  // A default import always comes first in the clause — safe to delete from the clause's start through the following comma/whitespace up to the named bindings.
+  const start = importClause!.getStart(source);
+  const end = namedBindings.getStart(source);
+  return sourceText.slice(0, start) + sourceText.slice(end);
+}
+
+/** Removes the import binding for `localName` — a named specifier (dropping the whole import statement if it was the only specifier and there's no default import alongside it) or a default import (see removeDefaultImportBinding) — the cross-file counterpart of deleting a local declaration, since `variableName` is no longer available as an import once its source array is gone. Leaves sourceText untouched if no matching import is found (shouldn't normally happen; findRepeatingContent only takes this path after finding exactly this import). */
+function removeImportBinding(sourceText: string, filePath: string, localName: string): string {
   const source = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   for (const statement of source.statements) {
     if (!ts.isImportDeclaration(statement) || !statement.importClause) continue;
+
+    if (statement.importClause.name?.text === localName) {
+      return removeDefaultImportBinding(sourceText, source, statement);
+    }
+
     const namedBindings = statement.importClause.namedBindings;
     if (!namedBindings || !ts.isNamedImports(namedBindings)) continue;
     const elements = namedBindings.elements;
@@ -182,7 +201,7 @@ export function rewriteArraySource(options: RewriteArraySourceOptions): string {
 
   let afterEdits = applyEdits(sourceText, edits);
   if (!hasLocalDeclaration) {
-    afterEdits = removeNamedImportSpecifier(afterEdits, filePath, variableName);
+    afterEdits = removeImportBinding(afterEdits, filePath, variableName);
   }
 
   const configImportSpecifier = toImportSpecifier(filePath, configFilePath);

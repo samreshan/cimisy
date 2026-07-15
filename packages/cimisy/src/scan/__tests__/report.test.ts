@@ -297,6 +297,49 @@ describe("runScan — static content (--full)", () => {
     expect(candidate.proposedKey).toBe("footer");
     expect(candidate.usedOnRoutes.sort()).toEqual(["/about", "/contact"]);
   });
+
+  it("does not analyze page metadata by default (full: false)", async () => {
+    await writeFile(
+      path.join(appDir, "page.tsx"),
+      `export const metadata = { title: "Home" }; export default function Home() { return <div />; }`,
+    );
+    const report = await runScan({ appDir, projectRoot: root });
+    expect(report.pageMetadataCandidates).toEqual([]);
+    expect(report.pageMetadataUnanalyzable).toEqual([]);
+  });
+
+  it("reports a page's export const metadata, tagged with its route", async () => {
+    await mkdir(path.join(appDir, "careers"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "careers", "page.tsx"),
+      `
+        export const metadata = {
+          title: "Careers",
+          description: "Join a small, senior team.",
+          openGraph: { title: "Careers — Acme", description: "...", url: "/careers" },
+        };
+        export default function Careers() { return <div />; }
+      `,
+    );
+    const report = await runScan({ appDir, projectRoot: root, full: true });
+    expect(report.pageMetadataCandidates).toHaveLength(1);
+    const candidate = report.pageMetadataCandidates![0]!;
+    expect(candidate.routePath).toBe("/careers");
+    expect(candidate.title).toBe("Careers");
+    expect(candidate.description).toBe("Join a small, senior team.");
+    expect(candidate.canonical).toBe("/careers");
+  });
+
+  it("reports a page's non-literal metadata as unanalyzable", async () => {
+    await writeFile(
+      path.join(appDir, "page.tsx"),
+      `export const metadata = { title: getTitle() }; export default function Home() { return <div />; }`,
+    );
+    const report = await runScan({ appDir, projectRoot: root, full: true });
+    expect(report.pageMetadataCandidates).toEqual([]);
+    expect(report.pageMetadataUnanalyzable).toHaveLength(1);
+    expect(report.pageMetadataUnanalyzable![0]!.routePath).toBe("/");
+  });
 });
 
 describe("printScanReport", () => {
@@ -318,6 +361,23 @@ describe("printScanReport", () => {
     expect(text).toContain("date: text");
     expect(text).toContain("looks like a date");
     expect(text).toContain("used on /");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("prints page metadata candidates and marks them reporting-only", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "cimisy-print-metadata-"));
+    const appDir = path.join(root, "app");
+    await mkdir(path.join(appDir, "careers"), { recursive: true });
+    await writeFile(
+      path.join(appDir, "careers", "page.tsx"),
+      `export const metadata = { title: "Careers", description: "Join us" }; export default function Careers() { return <div />; }`,
+    );
+    const report = await runScan({ appDir, projectRoot: root, full: true });
+    const text = printScanReport(report);
+    expect(text).toContain("Page metadata (reporting only");
+    expect(text).toContain("/careers");
+    expect(text).toContain('title: "Careers"');
+    expect(text).toContain('description: "Join us"');
     await rm(root, { recursive: true, force: true });
   });
 

@@ -118,20 +118,63 @@ function evaluateArrayItems(elements: readonly ts.Expression[]): { items: Array<
 
 interface ImportedArrayDeclaration {
   declarationFile: string;
-  declSource: ts.SourceFile;
-  declarationNode: ts.VariableDeclaration;
+  /** Char offsets of the whole declaration to delete in declarationFile's text — the `const X = [...]`/`export default [...]` statement, or the whole file for a `.json` data module (see the JSON branch below). */
+  declarationStart: number;
+  declarationEnd: number;
+  evaluated: { items: Array<Record<string, LiteralValue>> } | { error: string };
+}
+
+/** JSON's value grammar is a subset of literalValueFromExpression's — reused here since `.json` data files are parsed with JSON.parse, not the TS parser (see resolveImportedArrayDeclaration's JSON branch). */
+function jsonValueToLiteral(value: unknown, depth: number): LiteralValue | typeof NOT_LITERAL {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) {
+    if (depth >= 3) return NOT_LITERAL;
+    const values: LiteralValue[] = [];
+    for (const el of value) {
+      const v = jsonValueToLiteral(el, depth + 1);
+      if (v === NOT_LITERAL) return NOT_LITERAL;
+      values.push(v);
+    }
+    return values;
+  }
+  return NOT_LITERAL; // nested objects aren't a supported field shape, same ceiling as objectLiteralToRecord
+}
+
+function jsonObjectToRecord(obj: Record<string, unknown>): Record<string, LiteralValue> | { error: string } {
+  const record: Record<string, LiteralValue> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const v = jsonValueToLiteral(value, 0);
+    if (v === NOT_LITERAL) return { error: `field "${key}" is not a supported literal value (nested objects are not supported)` };
+    record[key] = v;
+  }
+  return record;
+}
+
+function evaluateJsonArrayItems(parsed: unknown[]): { items: Array<Record<string, LiteralValue>> } | { error: string } {
+  const items: Array<Record<string, LiteralValue>> = [];
+  for (const [index, element] of parsed.entries()) {
+    if (typeof element !== "object" || element === null || Array.isArray(element)) {
+      return { error: `item ${index} is not an object literal` };
+    }
+    const result = jsonObjectToRecord(element as Record<string, unknown>);
+    if ("error" in result) return { error: `item ${index}: ${result.error}` };
+    items.push(result);
+  }
+  if (items.length === 0) return { error: "array is empty, nothing to infer a schema from" };
+  return { items };
 }
 
 /**
  * When a `.map()`'d identifier has no local declaration, checks whether
- * it's bound by a plain named import (`import { leaders } from
- * "../../data/leadership"` — not a default or namespace import, which stay
- * unresolved just like they were before this existed) and, if so, follows
- * it one hop to find a matching top-level `export const <name> = [...]` in
- * the target module. Data factored into its own module — leaderboard.js,
- * jobs.js, etc. — is arguably the *more* common shape than an inline
- * array, so leaving this unresolved would miss more real content than it
- * catches.
+ * it's bound by an import — a plain named import (`import { leaders } from
+ * "../../data/leadership"`) or a default import (`import chaptersRaw from
+ * "../../data/about-timeline.json"` — the shape every `.json` data import
+ * takes under webpack/Next's JSON interop, and also common for a plain
+ * `export default [...]` data module) — and, if so, follows it one hop to
+ * find the actual array. Data factored into its own module — leaderboard.js,
+ * jobs.js, timeline.json, etc. — is arguably the *more* common shape than an
+ * inline array, so leaving this unresolved would miss more real content than
+ * it catches. Namespace imports (`import * as x`) stay unresolved.
  */
 async function resolveImportedArrayDeclaration(
   source: ts.SourceFile,
@@ -141,12 +184,13 @@ async function resolveImportedArrayDeclaration(
 ): Promise<ImportedArrayDeclaration | null> {
   for (const statement of source.statements) {
     if (!ts.isImportDeclaration(statement) || !statement.importClause || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    const namedBindings = statement.importClause.namedBindings;
-    if (!namedBindings || !ts.isNamedImports(namedBindings)) continue;
-    const element = namedBindings.elements.find((el) => el.name.text === localName);
-    if (!element) continue;
+    const { importClause } = statement;
+    const isDefaultImport = importClause.name?.text === localName;
+    const namedBindings = importClause.namedBindings;
+    const namedElement =
+      namedBindings && ts.isNamedImports(namedBindings) ? namedBindings.elements.find((el) => el.name.text === localName) : undefined;
+    if (!isDefaultImport && !namedElement) continue;
 
-    const exportedName = (element.propertyName ?? element.name).text;
     const projectRoot = options.projectRoot ?? path.dirname(filePath);
     const resolvedPath = await resolveModuleSpecifier(statement.moduleSpecifier.text, filePath, projectRoot, options.pathAliases ?? {});
     if (!resolvedPath) return null;
@@ -157,7 +201,40 @@ async function resolveImportedArrayDeclaration(
     } catch {
       return null;
     }
+
+    if (isDefaultImport && resolvedPath.endsWith(".json")) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(declarationText);
+      } catch {
+        return null; // malformed JSON — the app itself wouldn't build either; not our problem to report
+      }
+      if (!Array.isArray(parsed)) return null; // resolved to a real file, but its root isn't an array
+      return {
+        declarationFile: resolvedPath,
+        declarationStart: 0,
+        declarationEnd: declarationText.length,
+        evaluated: evaluateJsonArrayItems(parsed),
+      };
+    }
+
     const declSource = ts.createSourceFile(resolvedPath, declarationText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+
+    if (isDefaultImport) {
+      for (const declStatement of declSource.statements) {
+        if (!ts.isExportAssignment(declStatement) || declStatement.isExportEquals) continue; // `export =` is CommonJS-style, not a default export
+        if (!ts.isArrayLiteralExpression(declStatement.expression)) continue;
+        return {
+          declarationFile: resolvedPath,
+          declarationStart: declStatement.getStart(declSource),
+          declarationEnd: declStatement.getEnd(),
+          evaluated: evaluateArrayItems(declStatement.expression.elements),
+        };
+      }
+      return null; // resolved to a real file, but no `export default [...]` array literal there
+    }
+
+    const exportedName = (namedElement!.propertyName ?? namedElement!.name).text;
     for (const declStatement of declSource.statements) {
       if (!ts.isVariableStatement(declStatement)) continue;
       const isExported = declStatement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
@@ -169,13 +246,19 @@ async function resolveImportedArrayDeclaration(
           decl.initializer &&
           ts.isArrayLiteralExpression(decl.initializer)
         ) {
-          return { declarationFile: resolvedPath, declSource, declarationNode: decl };
+          const enclosingStatement = findEnclosingStatement(decl);
+          return {
+            declarationFile: resolvedPath,
+            declarationStart: enclosingStatement.getStart(declSource),
+            declarationEnd: enclosingStatement.getEnd(),
+            evaluated: evaluateArrayItems(decl.initializer.elements),
+          };
         }
       }
     }
     return null; // resolved to a real file, but no matching exported array literal there
   }
-  return null; // not bound by a plain named import (local const, default/namespace import, etc.)
+  return null; // not bound by any import (local const, namespace import, etc.)
 }
 
 /**
@@ -244,20 +327,18 @@ export async function findRepeatingContent(
     if (locallyDeclared.has(variableName)) continue;
     const resolved = await resolveImportedArrayDeclaration(source, variableName, filePath, options);
     if (!resolved) continue;
-    const { declarationFile, declSource, declarationNode } = resolved;
-    const evaluated = evaluateArrayItems((declarationNode.initializer as ts.ArrayLiteralExpression).elements);
+    const { declarationFile, declarationStart, declarationEnd, evaluated } = resolved;
     if ("error" in evaluated) {
       unanalyzable.push({ variableName, sourceFile: filePath, declarationFile, reason: evaluated.error });
       continue;
     }
-    const statement = findEnclosingStatement(declarationNode);
     repeatingContent.push({
       variableName,
       sourceFile: filePath,
       declarationFile,
       items: evaluated.items,
-      declarationStart: statement.getStart(declSource),
-      declarationEnd: statement.getEnd(),
+      declarationStart,
+      declarationEnd,
       mapCallStart,
     });
   }
@@ -343,6 +424,16 @@ async function resolveOnDisk(basePath: string): Promise<string | null> {
   return null;
 }
 
+/** Specifiers carrying their own extension (`.json` data imports, chiefly) resolve to that exact file rather than through resolveOnDisk's extension-guessing — appending ".tsx" etc. onto an already-extensioned path would never match. */
+const EXPLICIT_EXTENSIONS = [".json", ".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
+
+async function resolveExplicitOrOnDisk(basePath: string): Promise<string | null> {
+  if (EXPLICIT_EXTENSIONS.some((ext) => basePath.endsWith(ext))) {
+    return (await fileExists(basePath)) ? basePath : null;
+  }
+  return resolveOnDisk(basePath);
+}
+
 async function resolveModuleSpecifier(
   specifier: string,
   fromFile: string,
@@ -350,7 +441,7 @@ async function resolveModuleSpecifier(
   pathAliases: Record<string, string>,
 ): Promise<string | null> {
   if (specifier.startsWith("./") || specifier.startsWith("../")) {
-    return resolveOnDisk(path.resolve(path.dirname(fromFile), specifier));
+    return resolveExplicitOrOnDisk(path.resolve(path.dirname(fromFile), specifier));
   }
   for (const [aliasPattern, target] of Object.entries(pathAliases)) {
     // Only the common single-wildcard form ("@/*" -> "./src/*") is supported.
@@ -360,7 +451,7 @@ async function resolveModuleSpecifier(
     const rest = specifier.slice(prefix.length);
     const targetBase = target.slice(0, -1);
     // Aliases resolve relative to the project root (tsconfig's location), not the importing file.
-    return resolveOnDisk(path.resolve(projectRoot, targetBase, rest));
+    return resolveExplicitOrOnDisk(path.resolve(projectRoot, targetBase, rest));
   }
   return null;
 }

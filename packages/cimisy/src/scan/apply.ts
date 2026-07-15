@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { humanizeLabel, insertCollectionIntoConfig, scaffoldConfigFile } from "../codegen/insert-collection-config.js";
 import { deleteArrayDeclaration, rewriteArraySource } from "../codegen/rewrite-array-source.js";
@@ -185,9 +185,16 @@ export async function applyCandidate(options: ApplyCandidateOptions): Promise<Ap
 
   let rewrittenDeclarationFile: string | undefined;
   if (isCrossFile) {
-    const declarationText = await readFile(candidate.declarationFile, "utf8");
-    const rewrittenDeclaration = deleteArrayDeclaration(declarationText, candidate.declarationStart, candidate.declarationEnd);
-    await writeFile(candidate.declarationFile, rewrittenDeclaration, "utf8");
+    if (candidate.declarationFile.endsWith(".json")) {
+      // A `.json` data module's entire content IS the array (analyze-source.ts's JSON
+      // resolution only ever matches a root-level array) — text-splicing declarationStart..End
+      // would leave an empty, invalid JSON file behind instead of removing the now-dead import target.
+      await unlink(candidate.declarationFile);
+    } else {
+      const declarationText = await readFile(candidate.declarationFile, "utf8");
+      const rewrittenDeclaration = deleteArrayDeclaration(declarationText, candidate.declarationStart, candidate.declarationEnd);
+      await writeFile(candidate.declarationFile, rewrittenDeclaration, "utf8");
+    }
     rewrittenDeclarationFile = candidate.declarationFile;
   }
 

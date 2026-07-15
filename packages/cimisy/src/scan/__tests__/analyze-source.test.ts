@@ -187,13 +187,103 @@ describe("findRepeatingContent", () => {
       expect(result.unanalyzable[0]!.reason).toMatch(/not an object literal/);
     });
 
-    it("leaves a default-imported array unresolved rather than guessing (named-import following only)", async () => {
+    it("follows a default import back to its `export default [...]` array declaration", async () => {
       await mkdir(path.join(root, "data"), { recursive: true });
-      await writeFile(path.join(root, "data", "leadership.js"), `export default [{ name: "A" }];\n`);
+      const dataFile = path.join(root, "data", "leadership.js");
+      await writeFile(dataFile, `export default [\n  { name: "A" },\n  { name: "B" },\n];\n`);
       const componentFile = path.join(root, "Grid.jsx");
       const componentSource = `
         import leaders from "./data/leadership";
         export function Grid() { return <div>{leaders.map(l => <p key={l.name}>{l.name}</p>)}</div>; }
+      `;
+      const result = await findRepeatingContent(componentSource, componentFile);
+
+      expect(result.unanalyzable).toEqual([]);
+      expect(result.repeatingContent).toHaveLength(1);
+      const candidate = result.repeatingContent[0]!;
+      expect(candidate.variableName).toBe("leaders");
+      expect(candidate.declarationFile).toBe(dataFile);
+      expect(candidate.items).toEqual([{ name: "A" }, { name: "B" }]);
+
+      const dataText = await readFile(dataFile, "utf8");
+      expect(dataText.slice(candidate.declarationStart, candidate.declarationEnd)).toContain("export default [");
+    });
+
+    it("reports a default-imported `export default [...]` array as unanalyzable when its items aren't literal objects", async () => {
+      await mkdir(path.join(root, "data"), { recursive: true });
+      const dataFile = path.join(root, "data", "leadership.js");
+      await writeFile(dataFile, `export default ["A", "B"];\n`);
+      const componentFile = path.join(root, "Grid.jsx");
+      const componentSource = `
+        import leaders from "./data/leadership";
+        export function Grid() { return <div>{leaders.map(l => <p key={l}>{l}</p>)}</div>; }
+      `;
+      const result = await findRepeatingContent(componentSource, componentFile);
+      expect(result.repeatingContent).toEqual([]);
+      expect(result.unanalyzable).toHaveLength(1);
+      expect(result.unanalyzable[0]!.declarationFile).toBe(dataFile);
+      expect(result.unanalyzable[0]!.reason).toMatch(/not an object literal/);
+    });
+
+    it("follows a default import of a `.json` data module (webpack/Next's JSON interop shape)", async () => {
+      await mkdir(path.join(root, "data"), { recursive: true });
+      const dataFile = path.join(root, "data", "about-timeline.json");
+      await writeFile(dataFile, JSON.stringify([{ year: "2020", title: "Founded" }, { year: "2022", title: "Series A" }]));
+      const componentFile = path.join(root, "components", "AboutJourney.jsx");
+      await mkdir(path.dirname(componentFile), { recursive: true });
+      const componentSource = `
+        import chaptersRaw from "../data/about-timeline.json";
+        export function AboutJourney() { return <div>{chaptersRaw.map(c => <li key={c.year}>{c.title}</li>)}</div>; }
+      `;
+      const result = await findRepeatingContent(componentSource, componentFile);
+
+      expect(result.unanalyzable).toEqual([]);
+      expect(result.repeatingContent).toHaveLength(1);
+      const candidate = result.repeatingContent[0]!;
+      expect(candidate.variableName).toBe("chaptersRaw");
+      expect(candidate.declarationFile).toBe(dataFile);
+      expect(candidate.items).toEqual([
+        { year: "2020", title: "Founded" },
+        { year: "2022", title: "Series A" },
+      ]);
+      expect(candidate.declarationStart).toBe(0);
+    });
+
+    it("reports a `.json` array as unanalyzable when its items aren't plain objects", async () => {
+      await mkdir(path.join(root, "data"), { recursive: true });
+      const dataFile = path.join(root, "data", "tags.json");
+      await writeFile(dataFile, JSON.stringify(["a", "b"]));
+      const componentFile = path.join(root, "Grid.jsx");
+      const componentSource = `
+        import tags from "./data/tags.json";
+        export function Grid() { return <div>{tags.map(t => <span key={t}>{t}</span>)}</div>; }
+      `;
+      const result = await findRepeatingContent(componentSource, componentFile);
+      expect(result.repeatingContent).toEqual([]);
+      expect(result.unanalyzable).toHaveLength(1);
+      expect(result.unanalyzable[0]!.reason).toMatch(/not an object literal/);
+    });
+
+    it("leaves a `.json` import unresolved (not an error) when its root isn't an array", async () => {
+      await mkdir(path.join(root, "data"), { recursive: true });
+      await writeFile(path.join(root, "data", "settings.json"), JSON.stringify({ siteName: "Acme" }));
+      const componentFile = path.join(root, "Grid.jsx");
+      const componentSource = `
+        import settings from "./data/settings.json";
+        export function Grid() { return <div>{settings.pages.map(p => <span key={p}>{p}</span>)}</div>; }
+      `;
+      const result = await findRepeatingContent(componentSource, componentFile);
+      expect(result.repeatingContent).toEqual([]);
+      expect(result.unanalyzable).toEqual([]);
+    });
+
+    it("leaves a namespace-imported array unresolved rather than guessing", async () => {
+      await mkdir(path.join(root, "data"), { recursive: true });
+      await writeFile(path.join(root, "data", "leadership.js"), `export const leaders = [{ name: "A" }];\n`);
+      const componentFile = path.join(root, "Grid.jsx");
+      const componentSource = `
+        import * as leadership from "./data/leadership";
+        export function Grid() { return <div>{leadership.map(l => <p key={l.name}>{l.name}</p>)}</div>; }
       `;
       const result = await findRepeatingContent(componentSource, componentFile);
       expect(result.repeatingContent).toEqual([]);

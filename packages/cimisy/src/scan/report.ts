@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { humanizeLabel } from "../codegen/insert-collection-config.js";
+import { findPageMetadata } from "./analyze-page-metadata.js";
 import { findJsxSections, findRepeatingContent, type LiteralValue } from "./analyze-source.js";
 import { findStaticContent, type StaticFieldCandidate } from "./analyze-static-content.js";
 import { discoverPages } from "./discover-pages.js";
@@ -73,6 +74,24 @@ export interface PageSummary {
   routePath: string;
 }
 
+export interface PageMetadataCandidateReport {
+  sourceFile: string;
+  routePath: string;
+  title?: string;
+  description?: string;
+  canonical?: string;
+  nodeStart: number;
+  nodeEnd: number;
+}
+
+export interface PageMetadataUnanalyzableReport {
+  sourceFile: string;
+  routePath: string;
+  reason: string;
+  nodeStart: number;
+  nodeEnd: number;
+}
+
 export interface ScanReport {
   generatedAt: string;
   appDir: string;
@@ -83,6 +102,15 @@ export interface ScanReport {
   /** Only populated when RunScanOptions.full is true — always present (possibly empty) once a report has been produced by runScan, so the JSON shape is stable regardless of which mode produced it. Optional here only so hand-built ScanReport-shaped test fixtures predating --full still typecheck. */
   staticContentCandidates?: StaticContentCandidateReport[];
   staticUnanalyzable?: StaticUnanalyzableReport[];
+  /**
+   * A page's `export const metadata = {...}` (Next.js App Router's SEO
+   * convention) — reporting only for now (see analyze-page-metadata.ts);
+   * there's no `cimisy import`-style codemod for these yet, unlike
+   * collectionCandidates/staticContentCandidates. Same optionality
+   * rationale as staticContentCandidates.
+   */
+  pageMetadataCandidates?: PageMetadataCandidateReport[];
+  pageMetadataUnanalyzable?: PageMetadataUnanalyzableReport[];
 }
 
 export interface RunScanOptions {
@@ -162,6 +190,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanReport> {
   }
   const staticByKey = new Map<string, RawStaticRegion>();
   const staticUnanalyzableByKey = new Map<string, StaticUnanalyzableReport>();
+  const pageMetadataCandidates: PageMetadataCandidateReport[] = [];
+  const pageMetadataUnanalyzable: PageMetadataUnanalyzableReport[] = [];
   const fileTextCache = new Map<string, string>();
 
   const readCached = async (file: string): Promise<string> => {
@@ -176,6 +206,14 @@ export async function runScan(options: RunScanOptions): Promise<ScanReport> {
     const pageText = await readCached(pagePath);
     const routePath = deriveRoutePath(pagePath, options.appDir);
     pages.push({ pagePath, routePath });
+
+    if (options.full) {
+      // export const metadata is a page-file convention (not a JSX-reachable component concern), so
+      // this reads pagePath directly rather than joining resolveFilesToScan's component-import closure below.
+      const metadataResult = findPageMetadata(pageText, pagePath);
+      for (const candidate of metadataResult.metadata) pageMetadataCandidates.push({ ...candidate, routePath });
+      for (const item of metadataResult.unanalyzable) pageMetadataUnanalyzable.push({ ...item, routePath });
+    }
 
     const filesToScan = await resolveFilesToScan(
       pagePath,
@@ -348,6 +386,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanReport> {
     unanalyzable: [...unanalyzableByKey.values()],
     staticContentCandidates,
     staticUnanalyzable,
+    pageMetadataCandidates,
+    pageMetadataUnanalyzable,
   };
 }
 
@@ -365,12 +405,16 @@ function formatLocation(appDir: string, sourceFile: string, declarationFile: str
 export function printScanReport(report: ScanReport): string {
   const staticContentCandidates = report.staticContentCandidates ?? [];
   const staticUnanalyzable = report.staticUnanalyzable ?? [];
+  const pageMetadataCandidates = report.pageMetadataCandidates ?? [];
+  const pageMetadataUnanalyzable = report.pageMetadataUnanalyzable ?? [];
 
   if (
     report.collectionCandidates.length === 0 &&
     report.unanalyzable.length === 0 &&
     staticContentCandidates.length === 0 &&
-    staticUnanalyzable.length === 0
+    staticUnanalyzable.length === 0 &&
+    pageMetadataCandidates.length === 0 &&
+    pageMetadataUnanalyzable.length === 0
   ) {
     return "No repetitive content candidates found.";
   }
@@ -421,6 +465,29 @@ export function printScanReport(report: ScanReport): string {
     for (const item of staticUnanalyzable) {
       const rel = path.relative(report.appDir, item.sourceFile);
       lines.push(`  [${item.section}] ${item.regionHint}  (${rel})  — ${item.reason}  (used on ${formatRoutes(item.usedOnRoutes)})`);
+    }
+  }
+
+  if (pageMetadataCandidates.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("Page metadata (reporting only — not yet supported by `cimisy import`):");
+    for (const candidate of pageMetadataCandidates) {
+      const rel = path.relative(report.appDir, candidate.sourceFile);
+      const fields = [
+        candidate.title !== undefined ? `title: "${candidate.title}"` : null,
+        candidate.description !== undefined ? `description: "${candidate.description}"` : null,
+        candidate.canonical !== undefined ? `canonical: "${candidate.canonical}"` : null,
+      ].filter(Boolean);
+      lines.push(`  [${candidate.routePath}] ${rel}  — ${fields.join(", ")}`);
+    }
+  }
+
+  if (pageMetadataUnanalyzable.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("Detected but not import-eligible (page metadata):");
+    for (const item of pageMetadataUnanalyzable) {
+      const rel = path.relative(report.appDir, item.sourceFile);
+      lines.push(`  [${item.routePath}] ${rel}  — ${item.reason}`);
     }
   }
 

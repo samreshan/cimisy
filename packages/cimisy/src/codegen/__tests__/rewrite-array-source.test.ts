@@ -216,6 +216,65 @@ export function LeadershipGrid() {
       expect(result).toContain('import { createReader } from "cimisy/next";');
     });
 
+    it("removes the stale default import instead of a local declaration (export default [...] shape)", async () => {
+      await mkdir(path.join(root, "data"), { recursive: true });
+      await writeFile(path.join(root, "data", "leadership.js"), `export default [{ name: "A", title: "CEO" }];\n`);
+      const componentFile = path.join(root, "components", "LeadershipGrid.jsx");
+      await mkdir(path.dirname(componentFile), { recursive: true });
+      const sourceText = `import leaders from "../data/leadership";
+
+export function LeadershipGrid() {
+  return <div>{leaders.map((member) => <Card key={member.name} name={member.name} title={member.title} />)}</div>;
+}
+`;
+      const { repeatingContent } = await findRepeatingContent(sourceText, componentFile);
+      expect(repeatingContent).toHaveLength(1);
+      const candidate = repeatingContent[0]!;
+      expect(candidate.declarationFile).not.toBe(candidate.sourceFile);
+
+      const result = rewriteArraySource({
+        sourceText,
+        filePath: componentFile,
+        configFilePath: path.join(root, "cimisy.config.ts"),
+        variableName: candidate.variableName,
+        collectionName: "leadership",
+        fields: inferSchema(candidate.items).fields,
+        mapCallStart: candidate.mapCallStart,
+        // declarationStart/declarationEnd deliberately omitted — the array lives in data/leadership.js, not this file.
+      });
+
+      assertNoSyntaxErrors(result);
+      expect(result).not.toContain("../data/leadership");
+      expect(result).toContain("const leaders = (await cimisyReader.collections.leadership.all()).map((entry) => entry.values);");
+    });
+
+    it("drops just the default clause (not the whole import) when a named import shares the statement", async () => {
+      await mkdir(path.join(root, "data"), { recursive: true });
+      await writeFile(path.join(root, "data", "shared.js"), `export default [{ name: "A" }];\nexport const other = 1;\n`);
+      const componentFile = path.join(root, "Grid.jsx");
+      const sourceText = `import leaders, { other } from "./data/shared";
+export function Grid() {
+  return <div>{leaders.map(l => <p key={l.name}>{l.name}</p>)}{other}</div>;
+}
+`;
+      const { repeatingContent } = await findRepeatingContent(sourceText, componentFile);
+      const candidate = repeatingContent[0]!;
+      const result = rewriteArraySource({
+        sourceText,
+        filePath: componentFile,
+        configFilePath: path.join(root, "cimisy.config.ts"),
+        variableName: candidate.variableName,
+        collectionName: "leadership",
+        fields: inferSchema(candidate.items).fields,
+        mapCallStart: candidate.mapCallStart,
+      });
+      assertNoSyntaxErrors(result);
+      // `other` is still imported from the data module — only the default `leaders` binding was removed
+      expect(result).toMatch(/import \{ ?other ?\} from "\.\/data\/shared"/);
+      expect(result).not.toContain("leaders,");
+      expect(result).toContain("{other}");
+    });
+
     it("drops just the specifier (not the whole import) when other bindings share the statement", async () => {
       await mkdir(path.join(root, "data"), { recursive: true });
       await writeFile(path.join(root, "data", "shared.js"), `export const leaders = [{ name: "A" }];\nexport const other = 1;\n`);
