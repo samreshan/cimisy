@@ -1,6 +1,6 @@
 {
   "name": "cimisy",
-  "version": "2.2.5",
+  "version": "2.2.6",
   "description": "A git-based, security-first CMS that installs directly into an existing Next.js app.",
   "license": "Apache-2.0",
   "type": "module",
