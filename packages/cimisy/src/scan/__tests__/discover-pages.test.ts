@@ -50,6 +50,19 @@ describe("discoverPages", () => {
     expect(pages).toEqual([path.join(root, "page.tsx")]);
   });
 
+  it("finds page.js/.jsx/.ts pages too (regression: a plain-JS App Router project used to match nothing)", async () => {
+    await touch("page.js");
+    await touch("news/page.jsx");
+    await touch("about/page.ts");
+    await touch("layout.js");
+
+    const pages = await discoverPages({ appDir: root });
+
+    expect(pages.sort()).toEqual(
+      [path.join(root, "about/page.ts"), path.join(root, "news/page.jsx"), path.join(root, "page.js")].sort(),
+    );
+  });
+
   it("skips node_modules, .next, .git, and dotfile directories", async () => {
     await touch("node_modules/some-pkg/page.tsx");
     await touch(".next/cache/page.tsx");

@@ -1,4 +1,4 @@
-import { createInMemoryRateLimiter, type RateLimiter } from "../security/rate-limit.js";
+import type { RateLimiter } from "../security/rate-limit.js";
 import type { StorageAdapter } from "../storage/types.js";
 import { assertSafeRepoPath, resolveCollectionShape } from "../shared/slug.js";
 import type { CollectionDefinition } from "./collection.js";
@@ -104,7 +104,8 @@ export interface CimisyConfig {
    * Rate-limits admin API writes (keyed by identity) and the OAuth
    * callback (keyed by IP) — one limiter, two differently-prefixed key
    * namespaces, rather than two separately-tunable limiters, to keep this
-   * config surface small. Defaults to an in-memory limiter (see
+   * config surface small. Left undefined here, next/route-handler.ts's
+   * resolveRateLimiter defaults it to an in-memory limiter (see
    * security/rate-limit.ts) — fine for local dev and small
    * single-instance deployments, but NOT reliable across multiple
    * serverless function instances. Production deployments on
@@ -122,17 +123,23 @@ export interface CimisyConfig {
   readonly contentTree?: ContentTreeNode[];
 }
 
-/** CimisyConfig after config() — the normalized views are guaranteed present. */
+/**
+ * CimisyConfig after config() — the normalized views are guaranteed
+ * present. `rateLimiter` deliberately stays optional here too (unlike
+ * roles/roleMapping, which config() always fills in): constructing the
+ * in-memory default is a runtime concern that belongs in next/route-
+ * handler.ts, the only place that ever consumes it — see that file's
+ * resolveRateLimiter. Keeping config()/define-config.ts free of that
+ * import means loading a cimisy.config.ts (which the CLI does, outside
+ * Next's server runtime) never pulls in security/rate-limit.ts.
+ */
 export interface ResolvedCimisyConfig extends CimisyConfig {
   readonly roles: Record<string, RoleDefinition>;
   readonly roleMapping: Record<string, string>;
-  readonly rateLimiter: RateLimiter;
   readonly collectionsByKey: Record<string, NormalizedCollection>;
   readonly singletonsByKey: Record<string, NormalizedSingleton>;
   readonly contentTree: ContentTreeNode[];
 }
-
-const DEFAULT_RATE_LIMIT = { limit: 30, windowMs: 10_000 }; // 30 requests / 10s per key
 
 /**
  * Content keys become admin URLs, API route segments, and draft-branch ref
@@ -382,7 +389,6 @@ export function config(options: CimisyConfig): ResolvedCimisyConfig {
     ...options,
     roles: options.roles ?? DEFAULT_ROLES,
     roleMapping: options.roleMapping ?? DEFAULT_ROLE_MAPPING,
-    rateLimiter: options.rateLimiter ?? createInMemoryRateLimiter(DEFAULT_RATE_LIMIT),
     collectionsByKey: state.collectionsByKey,
     singletonsByKey: state.singletonsByKey,
     contentTree,

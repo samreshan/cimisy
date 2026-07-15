@@ -15,6 +15,7 @@ import {
 } from "../content/media.js";
 import { resolveRole } from "../rbac/resolve-role.js";
 import { readUserRoster, writeUserRoster } from "../rbac/user-store.js";
+import { createInMemoryRateLimiter, type RateLimiter } from "../security/rate-limit.js";
 import { assertSafeContentKey, draftBranchName, parseDraftBranchName, SINGLETON_DRAFT_SLUG } from "../shared/branch-name.js";
 import { CimisyError, ConflictError, ForbiddenError, NotFoundError, RateLimitedError, ValidationError } from "../shared/errors.js";
 import { isGithubSource } from "../shared/github-source-shape.js";
@@ -134,11 +135,33 @@ function resolveSafeRef(refParam: string | null): string {
   return refParam;
 }
 
+const DEFAULT_RATE_LIMIT = { limit: 30, windowMs: 10_000 }; // 30 requests / 10s per key
+
+/**
+ * config() deliberately leaves `rateLimiter` undefined when a project
+ * doesn't supply one (see define-config.ts's ResolvedCimisyConfig doc
+ * comment) — constructing the in-memory default is done here, the one
+ * place it's actually consumed, so that loading a cimisy.config.ts (which
+ * the CLI does, in a plain Node process with no Next.js server runtime)
+ * never has to import security/rate-limit.ts. Memoized per config object
+ * (not reconstructed per call) — a fresh createInMemoryRateLimiter() on
+ * every request would hand out a brand-new, always-empty Map each time,
+ * which never limits anything.
+ */
+const defaultRateLimiters = new WeakMap<ResolvedCimisyConfig, RateLimiter>();
+function resolveRateLimiter(cimisyConfig: ResolvedCimisyConfig): RateLimiter {
+  if (cimisyConfig.rateLimiter) return cimisyConfig.rateLimiter;
+  let limiter = defaultRateLimiters.get(cimisyConfig);
+  if (!limiter) {
+    limiter = createInMemoryRateLimiter(DEFAULT_RATE_LIMIT);
+    defaultRateLimiters.set(cimisyConfig, limiter);
+  }
+  return limiter;
+}
+
 /** Keyed by identity (not IP): the abuse case here is a compromised/buggy authenticated client hammering writes, not anonymous traffic — IP-keying would be trivially bypassed by anyone who can already authenticate. */
 async function enforceWriteRateLimit(cimisyConfig: ResolvedCimisyConfig, actor: Actor): Promise<void> {
-  const limiter = cimisyConfig.rateLimiter;
-  if (!limiter) return;
-  const result = await limiter.consume(`write:${actor.author.id}`);
+  const result = await resolveRateLimiter(cimisyConfig).consume(`write:${actor.author.id}`);
   if (!result.allowed) {
     throw new RateLimitedError("Too many write requests — please slow down.", result.retryAfterMs);
   }
@@ -175,9 +198,9 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
     if (!isGithubSource(cimisyConfig.source)) {
       return NextResponse.json({ error: "Auth routes require the GitHub source." }, { status: 404 });
     }
-    if (action === "login") return handleLogin(request, cimisyConfig.source, cimisyConfig.rateLimiter);
+    if (action === "login") return handleLogin(request, cimisyConfig.source, resolveRateLimiter(cimisyConfig));
     if (action === "callback") {
-      return handleCallback(request, cimisyConfig.source, cimisyConfig.rateLimiter, cimisyConfig.roleMapping);
+      return handleCallback(request, cimisyConfig.source, resolveRateLimiter(cimisyConfig), cimisyConfig.roleMapping);
     }
     if (action === "logout") {
       // POST-only so logout can't be triggered by a plain GET (e.g. an

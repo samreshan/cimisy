@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Fragment, type FormEvent, useEffect, useState } from "react";
 import type { CollectionManifest, FieldManifest } from "../../next/manifest.js";
 import { type EntrySummaryLike, type PublishResult, apiUrl } from "./api.js";
+import { ArrayField } from "./array-field.js";
 import { TiptapBlockEditor } from "./editor/block-editor.js";
 import { HistoryPanel } from "./history.js";
 import { ImageField } from "./image-field.js";
@@ -342,6 +343,9 @@ function FieldInput({
         draftRef={draftRef}
       />
     );
+  }
+  if (field.kind === "array") {
+    return <ArrayField field={field} value={value} onChange={onChange} />;
   }
   if (field.kind === "seo") {
     return (

@@ -1,5 +1,3 @@
-import "server-only";
-
 export interface RateLimitResult {
   allowed: boolean;
   /** Present when `allowed` is false — how long the caller should wait before retrying. */

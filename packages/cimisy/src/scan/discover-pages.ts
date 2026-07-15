@@ -8,9 +8,13 @@ export interface DiscoverPagesOptions {
 
 const SKIP_DIR_NAMES = new Set(["node_modules", ".next", ".git"]);
 
+/** The file names Next.js's App Router recognizes as a page by default (configurable via next.config's `pageExtensions`, but these four cover the default). */
+const PAGE_FILE_NAMES = new Set(["page.tsx", "page.ts", "page.jsx", "page.js"]);
+
 /**
- * Recursively finds every App Router `page.tsx` under `appDir`. Pages
- * Router (`pages/`) is out of scope — see the scan/apply plan.
+ * Recursively finds every App Router page file (page.tsx/ts/jsx/js) under
+ * `appDir`. Pages Router (`pages/`) is out of scope — see the scan/apply
+ * plan.
  */
 export async function discoverPages(options: DiscoverPagesOptions): Promise<string[]> {
   const pages: string[] = [];
@@ -29,7 +33,7 @@ async function walk(dir: string, out: string[]): Promise<void> {
     if (entry.isDirectory()) {
       if (SKIP_DIR_NAMES.has(entry.name) || entry.name.startsWith(".")) continue;
       await walk(path.join(dir, entry.name), out);
-    } else if (entry.isFile() && entry.name === "page.tsx") {
+    } else if (entry.isFile() && PAGE_FILE_NAMES.has(entry.name)) {
       out.push(path.join(dir, entry.name));
     }
   }
