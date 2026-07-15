@@ -1,9 +1,0 @@
----
-"cimisy": patch
----
-
-Fix two more `cimisy scan`/`cimisy import` bugs, both surfaced by running against a plain-JavaScript project:
-
-- **Unbounded `typescript` peer range.** `peerDependencies.typescript` had no upper bound (`>=5.0.0`), so a fresh install could silently pull in TypeScript 7 (the from-scratch Go rewrite), whose package exports map the bare `"."` specifier at a stub with no compiler API (`ts.createSourceFile`, `ts.ScriptTarget`, etc. all undefined) — every file in `scan/`, `codegen/`, and `config-detection.ts` that does `import ts from "typescript"` would crash. Capped to `>=5.0.0 <6.0.0`, the range actually exercised by this package's classic-compiler-API usage.
-- **The scanner only found arrays declared in the same file as their `.map()` call.** Data factored into its own module (`data/leadership.js`, imported as `import { leaders } from "../../data/leadership"` and mapped elsewhere) is arguably the more common shape than an inline array, but was silently dropped — not even reported as unanalyzable. `findRepeatingContent` now follows one hop through a plain named import (mirroring `findJsxSections`'s existing component resolution) back to a matching top-level `export const` in the target module; `cimisy import`'s codemod correctly rewrites both files in that case (deletes the data module's declaration, removes the now-stale import, and inserts the fetch at the `.map()` call site). Default/namespace imports and re-exports are intentionally left unresolved rather than guessed at.
-- Along the way, fixed two more TS-only assumptions that would've otherwise still broken a plain-JS project even with the above: the scanner's import resolver (`resolveOnDisk`) only tried `.tsx`/`.ts` file extensions (missing `.jsx`/`.js`), and the array→fetch codemod always inserted a TypeScript `as {...}` type-cast even when rewriting a plain `.js`/`.jsx` file, which doesn't parse as valid JavaScript.
