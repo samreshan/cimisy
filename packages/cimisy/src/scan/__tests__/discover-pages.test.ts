@@ -80,3 +80,65 @@ describe("discoverPages", () => {
     expect(pages).toEqual([]);
   });
 });
+
+// discoverEntrypoints is the 2.3 superset API discoverPages wraps.
+import { discoverEntrypoints } from "../discover-pages.js";
+
+describe("discoverEntrypoints", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "cimisy-discover-ep-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function touch(relPath: string): Promise<void> {
+    const full = path.join(root, relPath);
+    await mkdir(path.dirname(full), { recursive: true });
+    await writeFile(full, "");
+  }
+
+  it("finds layout/template/not-found/loading/error/global-error alongside pages", async () => {
+    await touch("page.tsx");
+    await touch("layout.tsx");
+    await touch("template.tsx");
+    await touch("not-found.tsx");
+    await touch("loading.tsx");
+    await touch("error.tsx");
+    await touch("global-error.tsx");
+    await touch("route.ts"); // handler — never an entrypoint
+    await touch("default.tsx"); // parallel-route fallback — deferred
+
+    const entrypoints = await discoverEntrypoints({ appDir: root });
+    expect(entrypoints.map((e) => e.kind).sort()).toEqual(
+      ["error", "global-error", "layout", "loading", "not-found", "page", "template"].sort(),
+    );
+  });
+
+  it("walks @slot parallel-route dirs but skips (.)-style intercepting-route dirs", async () => {
+    await touch("@sidebar/page.tsx");
+    await touch("feed/(..)photo/page.tsx");
+    await touch("feed/(.)modal/page.tsx");
+    await touch("feed/page.tsx");
+
+    const entrypoints = await discoverEntrypoints({ appDir: root });
+    expect(entrypoints.map((e) => path.relative(root, e.filePath)).sort()).toEqual(
+      ["@sidebar/page.tsx", "feed/page.tsx"].sort(),
+    );
+  });
+
+  it("applies exclude prefixes (appDir-relative, matching whole segments)", async () => {
+    await touch("admin/page.tsx");
+    await touch("admin/settings/page.tsx");
+    await touch("administrivia/page.tsx"); // prefix of the *string* but not the path — kept
+    await touch("page.tsx");
+
+    const entrypoints = await discoverEntrypoints({ appDir: root, exclude: ["admin"] });
+    expect(entrypoints.map((e) => path.relative(root, e.filePath)).sort()).toEqual(
+      ["administrivia/page.tsx", "page.tsx"].sort(),
+    );
+  });
+});

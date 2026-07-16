@@ -6,6 +6,8 @@ export function array<T>(itemField: FieldDefinition<T>): FieldDefinition<T[]> {
     kind: "array",
     label: itemField.label,
     location: "frontmatter",
-    zodSchema: z.array(itemField.zodSchema),
+    // .default([]) so an untouched list (never added to `values`) validates and round-trips
+    // as an explicit empty list instead of writing a file the parse path rejects.
+    zodSchema: z.array(itemField.zodSchema).default([]),
   };
 }

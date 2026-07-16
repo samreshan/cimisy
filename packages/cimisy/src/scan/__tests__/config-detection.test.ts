@@ -99,3 +99,50 @@ describe("detectSource", () => {
     expect(detectSource(configText, "/project/cimisy.config.js")).toEqual({ kind: "unknown" });
   });
 });
+
+import { detectScanConfig } from "../config-detection.js";
+
+describe("detectScanConfig", () => {
+  it("reads literal mode and exclude values", () => {
+    const detection = detectScanConfig(
+      `export default config({ source: localSource({ rootDir: "./content" }), scan: { mode: "static-metadata", exclude: ["admin", "(marketing)/legal"] } });`,
+      "cimisy.config.ts",
+    );
+    expect(detection.mode).toBe("static-metadata");
+    expect(detection.exclude).toEqual(["admin", "(marketing)/legal"]);
+    expect(detection.warnings).toEqual([]);
+  });
+
+  it("returns nothing when scan is absent", () => {
+    const detection = detectScanConfig(`export default config({ source: localSource({ rootDir: "./x" }) });`, "cimisy.config.ts");
+    expect(detection.mode).toBeUndefined();
+    expect(detection.exclude).toBeUndefined();
+    expect(detection.warnings).toEqual([]);
+  });
+
+  it("warns and ignores a computed mode instead of guessing", () => {
+    const detection = detectScanConfig(
+      `const m = "static"; export default config({ scan: { mode: m } });`,
+      "cimisy.config.js",
+    );
+    expect(detection.mode).toBeUndefined();
+    expect(detection.warnings).toHaveLength(1);
+    expect(detection.warnings[0]).toContain("cimisy.config.js");
+  });
+
+  it("warns on an unknown mode literal", () => {
+    const detection = detectScanConfig(`export default config({ scan: { mode: "everything" } });`, "cimisy.config.ts");
+    expect(detection.mode).toBeUndefined();
+    expect(detection.warnings).toHaveLength(1);
+  });
+
+  it("warns and ignores a non-literal exclude", () => {
+    const detection = detectScanConfig(
+      `export default config({ scan: { mode: "collections", exclude: buildExcludes() } });`,
+      "cimisy.config.ts",
+    );
+    expect(detection.mode).toBe("collections");
+    expect(detection.exclude).toBeUndefined();
+    expect(detection.warnings).toHaveLength(1);
+  });
+});

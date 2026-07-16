@@ -1,6 +1,7 @@
 import type { BlocksFieldDefinition } from "../config/fields/blocks.js";
 import type { ImageFieldDefinition } from "../config/fields/image.js";
 import type { SeoFieldDefinition } from "../config/fields/seo.js";
+import type { TextFieldDefinition } from "../config/fields/text.js";
 import type { FieldDefinition } from "../config/fields/types.js";
 import type { ResolvedCimisyConfig } from "../config/define-config.js";
 
@@ -22,6 +23,9 @@ export interface FieldManifest {
   blockTypes?: BlockTypeManifest[];
   /** Present for kind === "image" (and kind === "seo" when it configures one) — the repo-relative directory uploads through this field must land under (see content/media.ts's assertConfiguredDirectory). */
   directory?: string;
+  /** Present for kind === "text" when the field declared validation — drives the admin's required marker, maxLength attribute, and pre-submit checks. The server re-validates regardless (content/validate-values.ts). */
+  required?: boolean;
+  maxLength?: number;
 }
 
 export interface CollectionManifest {
@@ -74,6 +78,14 @@ export interface AdminManifest {
 
 function buildFieldManifest(fieldName: string, fieldDef: FieldDefinition): FieldManifest {
   const base: FieldManifest = { name: fieldName, kind: fieldDef.kind, label: fieldDef.label };
+  if (fieldDef.kind === "text") {
+    const validation = (fieldDef as TextFieldDefinition).validation;
+    return {
+      ...base,
+      ...(validation?.isRequired ? { required: true } : {}),
+      ...(validation?.maxLength ? { maxLength: validation.maxLength } : {}),
+    };
+  }
   if (fieldDef.kind === "image") {
     return { ...base, directory: (fieldDef as ImageFieldDefinition).directory };
   }

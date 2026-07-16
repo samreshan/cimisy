@@ -3,8 +3,15 @@
 import { type FormEvent, useEffect, useState } from "react";
 import type { SingletonManifest } from "../../next/manifest.js";
 import { type PublishResult, apiUrl } from "./api.js";
-import { Breadcrumb, buildSingletonPreviewUrl, FieldsEditor } from "./entry-form.js";
+import {
+  Breadcrumb,
+  buildSingletonPreviewUrl,
+  FieldsEditor,
+  mapIssuesToFieldErrors,
+  requiredFieldErrors,
+} from "./entry-form.js";
 import { HistoryPanel } from "./history.js";
+import { useUnsavedChangesGuard } from "./use-unsaved-guard.js";
 
 /** The reserved slug singleton drafts/uploads use — mirror of shared/branch-name.ts's SINGLETON_DRAFT_SLUG (not imported: that module is server-side). */
 const SINGLETON_SLUG = "singleton";
@@ -33,11 +40,14 @@ export function SingletonForm({
   // form can't be shown at all — submitting it would overwrite the real file with blanks.
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
   const [draftRef, setDraftRef] = useState<string | undefined>(undefined);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
+
+  useUnsavedChangesGuard(dirty);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,14 +85,28 @@ export function SingletonForm({
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setFieldErrors({});
+    const preSubmitErrors = requiredFieldErrors(singleton.fields, values);
+    if (Object.keys(preSubmitErrors).length > 0) {
+      setFieldErrors(preSubmitErrors);
+      return;
+    }
     const res = await fetch(apiUrl(apiBasePath, `/singletons/${singleton.key}`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ values, baseVersion: version }),
     });
-    const data = (await res.json()) as { version?: string; publish?: PublishResult; error?: string };
+    const data = (await res.json()) as { version?: string; publish?: PublishResult; error?: string; issues?: unknown };
     if (!res.ok || !data.version) {
-      setError(data.error ?? "Save failed");
+      const mapped = mapIssuesToFieldErrors(
+        data.issues,
+        singleton.fields.map((f) => f.name),
+      );
+      setFieldErrors(mapped.fieldErrors);
+      // The generic banner only carries what no input can display inline.
+      if (Object.keys(mapped.fieldErrors).length === 0 || mapped.unmapped.length > 0) {
+        setError(mapped.unmapped[0] ?? data.error ?? "Save failed");
+      }
       return;
     }
     setVersion(data.version);
@@ -129,9 +153,16 @@ export function SingletonForm({
           <FieldsEditor
             fields={singleton.fields}
             values={values}
+            errors={fieldErrors}
             onChange={(fieldName, v) => {
               setValues((prev) => ({ ...prev, [fieldName]: v }));
               setDirty(true);
+              setFieldErrors((prev) => {
+                if (!(fieldName in prev)) return prev;
+                const next = { ...prev };
+                delete next[fieldName];
+                return next;
+              });
             }}
             apiBasePath={apiBasePath}
             targetKey={singleton.key}

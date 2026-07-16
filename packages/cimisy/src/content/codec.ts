@@ -73,7 +73,10 @@ function splitFrontmatter(raw: string, path: string): { frontmatter: Record<stri
     throw new ValidationError(`Frontmatter in "${path}" is not valid YAML: ${issues}`, null);
   }
   const parsed: unknown = doc.toJS();
-  if (parsed !== null && parsed !== undefined && typeof parsed !== "object") {
+  // Array.isArray too: a YAML sequence is typeof "object", and with field
+  // defaults in play it would otherwise "parse" to an all-defaults mapping
+  // instead of failing closed.
+  if ((parsed !== null && parsed !== undefined && typeof parsed !== "object") || Array.isArray(parsed)) {
     throw new ValidationError(`Frontmatter in "${path}" must be a YAML mapping.`, null);
   }
   return { frontmatter: (parsed as Record<string, unknown> | null) ?? {}, body: (body ?? "").trim() };

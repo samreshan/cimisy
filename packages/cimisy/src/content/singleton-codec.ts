@@ -36,7 +36,10 @@ export function parseSingleton(def: NormalizedSingleton, raw: string): Record<st
     throw new ValidationError(`Singleton "${def.path}" is not valid YAML: ${issues}`, null);
   }
   const parsed: unknown = doc.toJS();
-  if (parsed !== null && parsed !== undefined && typeof parsed !== "object") {
+  // Array.isArray too: a YAML sequence is typeof "object", and with field
+  // defaults in play it would otherwise "parse" to an all-defaults mapping
+  // instead of failing closed.
+  if ((parsed !== null && parsed !== undefined && typeof parsed !== "object") || Array.isArray(parsed)) {
     throw new ValidationError(`Singleton "${def.path}" must be a YAML mapping.`, null);
   }
   const mapping = (parsed as Record<string, unknown> | null) ?? {};

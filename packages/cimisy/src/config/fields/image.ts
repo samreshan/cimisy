@@ -20,10 +20,13 @@ export function image(options: ImageFieldOptions): ImageFieldDefinition {
     kind: "image",
     label: options.label,
     location: "frontmatter",
+    // .default(null) so an untouched image input (never added to `values`) validates and
+    // round-trips as an explicit null instead of writing a file the parse path rejects.
     zodSchema: z
       .string()
       .refine((v) => !v.includes(".."), "Image path must not contain \"..\"")
-      .nullable(),
+      .nullable()
+      .default(null),
     directory: options.directory,
   };
 }

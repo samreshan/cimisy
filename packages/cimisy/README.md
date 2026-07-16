@@ -25,6 +25,7 @@ A git-based, security-first CMS that installs directly into an existing Next.js 
 - [Reading content on your site](#reading-content-on-your-site)
 - [Draft Mode / preview](#draft-mode--preview)
 - [Security](#security)
+- [Scanning & importing existing content](#scanning--importing-existing-content)
 - [Migrating to / away from cimisy](#migrating-to--away-from-cimisy)
 
 ## Quickstart (local adapter)
@@ -163,6 +164,7 @@ The top-level config object, from `cimisy/config`.
 | `roles` | `Record<string, RoleDefinition>` | no | defaults to a built-in admin/publisher/editor/viewer set — see [RBAC guide](#rbac-guide) |
 | `roleMapping` | `Record<string, string>` | no | GitHub permission level → role name, used only for first-admin bootstrap — see [RBAC guide](#rbac-guide) |
 | `rateLimiter` | `RateLimiter` | no | defaults to an in-memory limiter — see [Security](#security) |
+| `scan` | `ScanConfig` | no | defaults for the `cimisy scan` CLI (`{ mode?, exclude? }`) — see [Scanning & importing existing content](#scanning--importing-existing-content). No effect on the runtime admin/Reader. |
 
 ### `collection(options)`
 
@@ -421,9 +423,55 @@ cimisy holds write credentials to your repository, so security is treated as a f
 
 Full write-up, including the specific threat model and what's explicitly out of scope for v1: [SECURITY.md](https://github.com/samreshan/cimisy/blob/main/SECURITY.md) and [THREAT_MODEL.md](https://github.com/samreshan/cimisy/blob/main/THREAT_MODEL.md). Report vulnerabilities via GitHub's private vulnerability reporting — not a public issue.
 
+## Scanning & importing existing content
+
+`cimisy scan` statically analyzes a Next.js App Router codebase for hardcoded content that could move into cimisy, and `cimisy import` interactively applies the candidates you pick — writing content files, inserting config, and rewriting the source to read through the Reader. Import runs on a dedicated git branch and only supports `localSource` targets.
+
+The scan analyzes every App Router entrypoint — `page.*`, `layout.*`, `template.*`, `not-found.*`, `loading.*`, `error.*`, `global-error.*` (including inside `@slot` parallel-route directories) — plus the components they transitively render. Content found only in layouts is proposed as a shared singleton spanning every route below it.
+
+### Scan modes
+
+```sh
+npx cimisy scan --mode=static-metadata
+```
+
+| Mode | Repeating arrays → collections | Static headings/paragraphs/images/links → sections/singletons | `export const metadata` → SEO |
+|---|---|---|---|
+| `collections` (default) | ✓ | | |
+| `collections-metadata` | ✓ | | ✓ |
+| `static` | ✓ | ✓ | |
+| `static-metadata` | ✓ | ✓ | ✓ |
+
+Precedence: `--mode` flag > the config's `scan.mode` > `collections`. (`--full` still works as a deprecated alias for `--mode=static-metadata`.) Set defaults in `cimisy.config.ts` — both values must be plain literals, since the CLI reads the config statically without executing it:
+
+```ts
+export default config({
+  // ...
+  scan: {
+    mode: "static-metadata",
+    // appDir-relative path prefixes to skip entirely:
+    exclude: ["(cimisy)", "api"],
+  },
+});
+```
+
+### Metadata import
+
+A page's static `export const metadata = { title, description, openGraph: { url } }` is offered as an importable candidate: `cimisy import` inserts a `seo: section({ schema: { seo: fields.seo() } })` under that page in the config, writes the extracted values as YAML, and replaces the statement with a `generateMetadata()` that reads them back through the Reader and `createMetadata()` — so the SEO panel in the admin now controls the page's metadata.
+
+Refused (reported as "not import-eligible", never silently mangled): metadata containing properties `fields.seo()` can't store (`keywords`, `robots`, `openGraph.images`, …), `openGraph.title`/`description` that differ from the top-level values, non-literal values, existing `generateMetadata()` exports (already dynamic), and layout-level metadata (it spans every route below the layout — fold it into your site-wide SEO defaults instead).
+
+### CI mode
+
+```yaml
+- run: npx cimisy scan --ci --mode=static-metadata
+```
+
+`--ci` prints a one-line summary to stderr and exits **0** when the scan is clean, **1** when any candidate *or unanalyzable detection* exists (unanalyzable items are still hardcoded content the scanner saw — a gate that ignored them would lie), and **2** when the scan itself failed. Use `scan.exclude` or a narrower mode to silence areas that are deliberately out of scope. `--json` prints the full machine-readable report to stdout with project-root-relative paths, suitable as a CI artifact (`npx cimisy scan --ci --json > scan-report.json`).
+
 ## Migrating to / away from cimisy
 
-**Into cimisy:** point a collection's `path` at your existing MDX files (adjust their frontmatter to match your `schema`) — there's no importer/transform step because cimisy doesn't use a proprietary storage format to begin with.
+**Into cimisy:** point a collection's `path` at your existing MDX files (adjust their frontmatter to match your `schema`) — there's no transform step because cimisy doesn't use a proprietary storage format to begin with. For content that's hardcoded in your components rather than already in files, use [`cimisy scan` / `cimisy import`](#scanning--importing-existing-content).
 
 **Away from cimisy:** delete the two route files (`app/(cimisy)/admin/...`, `app/api/cimisy/...`) and `cimisy.config.ts`. What's left in your repo is plain MDX files with YAML frontmatter and a normal Next.js app — there is no export step, because content was never stored anywhere other than your own repository in a human-readable format.
 

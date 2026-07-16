@@ -21,18 +21,25 @@ export interface AdminAppProps {
 
 export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminAppProps) {
   const [me, setMe] = useState<MeResponse | null>(null);
+  const [meError, setMeError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setMeError(false);
+    setMe(null);
     fetch(apiUrl(apiBasePath, "/auth/me"))
       .then((res) => res.json())
       .then((data: MeResponse) => {
         if (!cancelled) setMe(data);
+      })
+      .catch(() => {
+        if (!cancelled) setMeError(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [apiBasePath]);
+  }, [apiBasePath, reloadKey]);
 
   return (
     // suppressHydrationWarning: the bootstrap script below sets data-theme on this exact element
@@ -48,7 +55,19 @@ export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminApp
           the moment the CSS contains a quote character (e.g. in font-family). This bypasses that
           escaping entirely, matching how the browser actually parses the tag. */}
       <style dangerouslySetInnerHTML={{ __html: ADMIN_THEME_CSS }} />
-      {me === null ? (
+      {meError ? (
+        <div className="cimisy-signin">
+          <h1 className="cimisy-heading">cimisy admin</h1>
+          <p className="cimisy-banner cimisy-banner-danger">Couldn&apos;t reach the admin API.</p>
+          <button
+            type="button"
+            className="cimisy-btn cimisy-btn-secondary"
+            onClick={() => setReloadKey((k) => k + 1)}
+          >
+            Retry
+          </button>
+        </div>
+      ) : me === null ? (
         <p className="cimisy-muted">Loading…</p>
       ) : !me.authenticated ? (
         <SignInGate apiBasePath={apiBasePath} />

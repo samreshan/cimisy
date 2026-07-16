@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { BlockNode } from "../config/fields/blocks.js";
+import type { SeoValue } from "../config/fields/seo.js";
 import { slugify } from "../shared/slug.js";
 import type { StaticContentCandidate } from "./analyze-static-content.js";
 
-export type StaticFieldProposalKind = "text" | "image" | "blocks";
+/** "seo" is produced only by the page-metadata importer (apply-page-metadata.ts), never by inferStaticSchema below — static regions have no metadata to propose. */
+export type StaticFieldProposalKind = "text" | "image" | "blocks" | "seo";
 
 export interface StaticFieldProposal {
   name: string;
   label: string;
   proposedKind: StaticFieldProposalKind;
-  initialValue: string | BlockNode[];
+  initialValue: string | BlockNode[] | SeoValue;
 }
 
 /**

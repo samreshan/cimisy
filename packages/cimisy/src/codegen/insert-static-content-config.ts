@@ -30,6 +30,8 @@ function staticFieldFactoryCall(field: StaticFieldProposal, contentKey: string):
       return `fields.image({ label: ${JSON.stringify(field.label)}, directory: ${JSON.stringify(`public/images/${contentKey}`)} })`;
     case "blocks":
       return `fields.blocks({ label: ${JSON.stringify(field.label)}, blocks: { paragraph: blocks.paragraph() } })`;
+    case "seo":
+      return `fields.seo()`;
   }
 }
 

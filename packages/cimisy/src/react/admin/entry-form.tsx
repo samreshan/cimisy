@@ -9,6 +9,7 @@ import { TiptapBlockEditor } from "./editor/block-editor.js";
 import { HistoryPanel } from "./history.js";
 import { ImageField } from "./image-field.js";
 import { SeoPanel } from "./seo-panel.js";
+import { useUnsavedChangesGuard } from "./use-unsaved-guard.js";
 
 /** A `cimisy / {segment} / .../ {here}` header — the reference layout's stand-in for a page
  * heading: the last segment (no href) carries the current entry, everything before it is a
@@ -60,6 +61,7 @@ export function FieldsEditor({
   slug,
   draftRef,
   titleField,
+  errors,
 }: {
   fields: FieldManifest[];
   values: Record<string, unknown>;
@@ -72,6 +74,8 @@ export function FieldsEditor({
    * branch) — EntryForm passes its collection's first text field; singletons have no equivalent
    * notion of "the" title, so SingletonForm omits it. */
   titleField?: string;
+  /** Per-field validation messages (field name → message), from the pre-submit check or a 400's field-prefixed issues. */
+  errors?: Record<string, string>;
 }) {
   return (
     <>
@@ -86,10 +90,48 @@ export function FieldsEditor({
           slug={slug}
           draftRef={draftRef}
           isTitle={field.name === titleField}
+          error={errors?.[field.name]}
         />
       ))}
     </>
   );
+}
+
+/**
+ * Maps a 400 response's field-prefixed issues (see content/validate-values.ts —
+ * `path[0]` is the field name) to a field→message record for FieldsEditor.
+ * Issues that don't name a known field fall through to `unmapped` so the
+ * caller can keep showing them in the generic banner instead of dropping them.
+ */
+export function mapIssuesToFieldErrors(
+  issues: unknown,
+  fieldNames: string[],
+): { fieldErrors: Record<string, string>; unmapped: string[] } {
+  const fieldErrors: Record<string, string> = {};
+  const unmapped: string[] = [];
+  if (!Array.isArray(issues)) return { fieldErrors, unmapped };
+  for (const issue of issues as { path?: (string | number)[]; message?: string }[]) {
+    const fieldName = issue?.path?.[0];
+    const message = issue?.message ?? "Invalid value.";
+    if (typeof fieldName === "string" && fieldNames.includes(fieldName)) {
+      // First message per field wins — one inline line per input, not a stack.
+      fieldErrors[fieldName] ??= message;
+    } else {
+      unmapped.push(message);
+    }
+  }
+  return { fieldErrors, unmapped };
+}
+
+/** Pre-submit required check mirroring the server's `.min(1, "Required.")` — catches empty required text fields without a round-trip. */
+export function requiredFieldErrors(fields: FieldManifest[], values: Record<string, unknown>): Record<string, string> {
+  const errors: Record<string, string> = {};
+  for (const field of fields) {
+    if (!field.required) continue;
+    const value = values[field.name];
+    if (typeof value !== "string" || value.length === 0) errors[field.name] = "Required.";
+  }
+  return errors;
 }
 
 export function EntryForm({
@@ -112,6 +154,7 @@ export function EntryForm({
   // form can't be shown at all — submitting it would overwrite the real file with blanks.
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
   // Mirrors whatever branch the entry is currently saved on, so an image
   // field's thumbnails (via /media/raw) resolve against the right ref for
@@ -126,6 +169,13 @@ export function EntryForm({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
+  // Two-step inline confirm ("Delete entry" → "Really delete?") instead of window.confirm —
+  // consistent with the theme and testable. `notice` carries the draft-deletion outcome.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useUnsavedChangesGuard(dirty);
 
   useEffect(() => {
     if (!slug) return;
@@ -157,14 +207,34 @@ export function EntryForm({
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setFieldErrors({});
+    const preSubmitErrors = requiredFieldErrors(collection.fields, values);
+    if (Object.keys(preSubmitErrors).length > 0) {
+      setFieldErrors(preSubmitErrors);
+      return;
+    }
     const res = await fetch(apiUrl(apiBasePath, `/collections/${collection.key}${slug ? `/${slug}` : ""}`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ values, baseVersion: version }),
     });
-    const data = (await res.json()) as { slug?: string; version?: string; publish?: PublishResult; error?: string };
+    const data = (await res.json()) as {
+      slug?: string;
+      version?: string;
+      publish?: PublishResult;
+      error?: string;
+      issues?: unknown;
+    };
     if (!res.ok || !data.slug) {
-      setError(data.error ?? "Save failed");
+      const mapped = mapIssuesToFieldErrors(
+        data.issues,
+        collection.fields.map((f) => f.name),
+      );
+      setFieldErrors(mapped.fieldErrors);
+      // The generic banner only carries what no input can display inline.
+      if (Object.keys(mapped.fieldErrors).length === 0 || mapped.unmapped.length > 0) {
+        setError(mapped.unmapped[0] ?? data.error ?? "Save failed");
+      }
       return;
     }
     setVersion(data.version ?? null);
@@ -173,6 +243,36 @@ export function EntryForm({
     setDirty(false);
     setPreviewKey((k) => k + 1);
     router.push(`${basePath}/${collection.key}/${data.slug}`);
+    router.refresh();
+  }
+
+  async function handleDelete() {
+    if (!slug) return;
+    setError(null);
+    setNotice(null);
+    setDeleting(true);
+    const res = await fetch(apiUrl(apiBasePath, `/collections/${collection.key}/${slug}`), {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseVersion: version }),
+    });
+    const data = (await res.json()) as { ok?: boolean; publish?: PublishResult; error?: string };
+    setDeleting(false);
+    setConfirmingDelete(false);
+    if (!res.ok || !data.ok) {
+      setError(data.error ?? "Delete failed");
+      return;
+    }
+    if (data.publish?.status === "draft") {
+      // The entry still exists on the default branch — deletion itself is a
+      // reviewed change for draft-role users. Stay on the form and surface the PR.
+      setPublishResult(data.publish);
+      setDraftRef(data.publish.branch);
+      setNotice("Deletion opened as a draft pull request — the entry stays published until it's approved.");
+      return;
+    }
+    setDirty(false);
+    router.push(`${basePath}/${collection.key}`);
     router.refresh();
   }
 
@@ -220,13 +320,29 @@ export function EntryForm({
               </button>
             )}
           </div>
-          {error && <p className="cimisy-banner cimisy-banner-danger">{error}</p>}
+          {error && (
+            <p className="cimisy-banner cimisy-banner-danger" role="alert">
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p className="cimisy-banner cimisy-banner-warning" role="status">
+              {notice}
+            </p>
+          )}
           <FieldsEditor
             fields={collection.fields}
             values={values}
+            errors={fieldErrors}
             onChange={(fieldName, v) => {
               setValues((prev) => ({ ...prev, [fieldName]: v }));
               setDirty(true);
+              setFieldErrors((prev) => {
+                if (!(fieldName in prev)) return prev;
+                const next = { ...prev };
+                delete next[fieldName];
+                return next;
+              });
             }}
             apiBasePath={apiBasePath}
             targetKey={collection.key}
@@ -265,9 +381,40 @@ export function EntryForm({
                 </span>
               )}
             </div>
-            <button type="submit" className="cimisy-btn cimisy-btn-primary">
-              Save
-            </button>
+            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {slug &&
+                (confirmingDelete ? (
+                  <>
+                    <button
+                      type="button"
+                      className="cimisy-btn cimisy-btn-danger"
+                      disabled={deleting}
+                      onClick={handleDelete}
+                    >
+                      {deleting ? "Deleting…" : "Really delete?"}
+                    </button>
+                    <button
+                      type="button"
+                      className="cimisy-btn cimisy-btn-ghost"
+                      disabled={deleting}
+                      onClick={() => setConfirmingDelete(false)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="cimisy-btn cimisy-btn-ghost"
+                    onClick={() => setConfirmingDelete(true)}
+                  >
+                    Delete entry
+                  </button>
+                ))}
+              <button type="submit" className="cimisy-btn cimisy-btn-primary">
+                Save
+              </button>
+            </span>
           </div>
         </form>
         {slug && (
@@ -304,6 +451,7 @@ function FieldInput({
   slug,
   draftRef,
   isTitle,
+  error,
 }: {
   field: FieldManifest;
   value: unknown;
@@ -313,6 +461,7 @@ function FieldInput({
   slug: string | null;
   draftRef?: string;
   isTitle?: boolean;
+  error?: string;
 }) {
   if (field.kind === "blocks") {
     // Keyed by entry identity (not just field.name, which is stable across
@@ -382,6 +531,11 @@ function FieldInput({
       <div className="cimisy-title-field">
         <label className="cimisy-title-label" htmlFor={field.name}>
           {field.label}
+          {field.required && (
+            <span className="cimisy-required-marker" aria-hidden="true">
+              *
+            </span>
+          )}
         </label>
         <input
           id={field.name}
@@ -390,7 +544,15 @@ function FieldInput({
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value)}
           placeholder={field.label}
+          maxLength={field.maxLength}
+          aria-required={field.required || undefined}
+          aria-invalid={error ? true : undefined}
         />
+        {error && (
+          <p className="cimisy-field-error" role="alert">
+            {error}
+          </p>
+        )}
       </div>
     );
   }
@@ -398,6 +560,11 @@ function FieldInput({
     <div className="cimisy-field">
       <label className="cimisy-label" htmlFor={field.name}>
         {field.label}
+        {field.required && (
+          <span className="cimisy-required-marker" aria-hidden="true">
+            *
+          </span>
+        )}
       </label>
       <input
         id={field.name}
@@ -405,7 +572,15 @@ function FieldInput({
         type="text"
         value={typeof value === "string" ? value : ""}
         onChange={(e) => onChange(e.target.value)}
+        maxLength={field.maxLength}
+        aria-required={field.required || undefined}
+        aria-invalid={error ? true : undefined}
       />
+      {error && (
+        <p className="cimisy-field-error" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
