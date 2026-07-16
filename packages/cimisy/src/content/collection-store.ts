@@ -4,6 +4,7 @@ import { CimisyError } from "../shared/errors.js";
 import { assertSafeSlug, entryPathForSlug, slugify } from "../shared/slug.js";
 import type { ChangeAuthor, ChangeResult, StorageAdapter } from "../storage/types.js";
 import { parseEntry, serializeEntry } from "./codec.js";
+import { validateFieldValues } from "./validate-values.js";
 
 export interface EntrySummary {
   slug: string;
@@ -106,7 +107,7 @@ export async function writeEntry(
   input: WriteEntryInput,
 ): Promise<{ result: ChangeResult; slug: string }> {
   const slug = resolveEntrySlug(def, input.values, input.slug);
-  const values = { ...input.values, [def.slugField]: slug };
+  const values = validateFieldValues(def.schema, { ...input.values, [def.slugField]: slug });
   const content = serializeEntry(def.schema, values);
   const path = entryPathForSlug(def.path, slug);
   const result = await adapter.commitChange({

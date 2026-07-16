@@ -71,7 +71,7 @@ describe("applyStaticCandidate", () => {
     const rewrittenSource = await readFile(path.join(appDir, "about", "page.tsx"), "utf8");
     assertNoSyntaxErrors(rewrittenSource);
     expect(rewrittenSource).not.toContain("About us");
-    expect(rewrittenSource).toContain("cimisyReader.pages.about.hero.get()");
+    expect(rewrittenSource).toContain('(cimisyReader.pages.about.hero as import("cimisy/next").SingletonReader).get()');
     expect(rewrittenSource).toContain("export default async function About()");
   });
 

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { defaultReportPath, loadScanReport, printScanReport, runScan, saveScanReport } from "../report.js";
+import { defaultReportPath, formatScanSummaryLine, loadScanReport, printScanReport, runScan, saveScanReport, scanFindingsExitCode, toPortableReport, type ScanReport } from "../report.js";
 
 describe("runScan", () => {
   let root: string;
@@ -338,7 +338,7 @@ describe("runScan — static content (--full)", () => {
         export const metadata = {
           title: "Careers",
           description: "Join a small, senior team.",
-          openGraph: { title: "Careers — Acme", description: "...", url: "/careers" },
+          openGraph: { title: "Careers", description: "Join a small, senior team.", url: "/careers" },
         };
         export default function Careers() { return <div />; }
       `,
@@ -386,7 +386,7 @@ describe("printScanReport", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("prints page metadata candidates and marks them reporting-only", async () => {
+  it("prints page metadata candidates", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "cimisy-print-metadata-"));
     const appDir = path.join(root, "app");
     await mkdir(path.join(appDir, "careers"), { recursive: true });
@@ -396,7 +396,7 @@ describe("printScanReport", () => {
     );
     const report = await runScan({ appDir, projectRoot: root, full: true });
     const text = printScanReport(report);
-    expect(text).toContain("Page metadata (reporting only");
+    expect(text).toContain("Page metadata candidates:");
     expect(text).toContain("/careers");
     expect(text).toContain('title: "Careers"');
     expect(text).toContain('description: "Join us"');
@@ -456,5 +456,193 @@ describe("saveScanReport / loadScanReport", () => {
     const loaded = await loadScanReport(cachePath);
     expect(loaded).toEqual(report);
     await rm(root, { recursive: true, force: true });
+  });
+});
+
+describe("runScan — scan modes and whole-site entrypoints (v2.3)", () => {
+  let root: string;
+  let appDir: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "cimisy-report-v23-"));
+    appDir = path.join(root, "src", "app");
+    await mkdir(appDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function write(relPath: string, text: string): Promise<void> {
+    const full = path.join(appDir, relPath);
+    await mkdir(path.dirname(full), { recursive: true });
+    await writeFile(full, text);
+  }
+
+  const LAYOUT_WITH_FOOTER = `
+    export const metadata = { title: "Site" };
+    export default function RootLayout({ children }) {
+      return (
+        <html><body>
+          {children}
+          <footer id="site-footer">
+            <h2>Contact us</h2>
+            <p>Reach us at our office.</p>
+          </footer>
+        </body></html>
+      );
+    }
+  `;
+
+  const PAGE_WITH_METADATA = `
+    export const metadata = { title: "About", description: "Who we are" };
+    export default function AboutPage() { return <main><h1>About heading</h1><p>About body text.</p></main>; }
+  `;
+
+  it("collections mode scans neither static content nor metadata; the report records mode + version", async () => {
+    await write("layout.tsx", LAYOUT_WITH_FOOTER);
+    await write("about/page.tsx", PAGE_WITH_METADATA);
+    await write("page.tsx", `export default function Home() { return <main><h1>Home</h1><p>Welcome text.</p></main>; }`);
+
+    const report = await runScan({ appDir, projectRoot: root, mode: "collections" });
+    expect(report.mode).toBe("collections");
+    expect(report.reportVersion).toBe(1);
+    expect(report.staticContentCandidates).toEqual([]);
+    expect(report.pageMetadataCandidates).toEqual([]);
+  });
+
+  it("collections-metadata mode scans metadata but not static content", async () => {
+    await write("about/page.tsx", PAGE_WITH_METADATA);
+    const report = await runScan({ appDir, projectRoot: root, mode: "collections-metadata" });
+    expect(report.pageMetadataCandidates).toHaveLength(1);
+    expect(report.pageMetadataCandidates![0]!.pageKey).toBe("about");
+    expect(report.staticContentCandidates).toEqual([]);
+  });
+
+  it("static mode scans static content but not metadata", async () => {
+    await write("about/page.tsx", PAGE_WITH_METADATA);
+    const report = await runScan({ appDir, projectRoot: root, mode: "static" });
+    expect(report.pageMetadataCandidates).toEqual([]);
+    expect(report.staticContentCandidates!.length).toBeGreaterThan(0);
+  });
+
+  it("full:true still behaves as the static-metadata alias", async () => {
+    await write("about/page.tsx", PAGE_WITH_METADATA);
+    const report = await runScan({ appDir, projectRoot: root, full: true });
+    expect(report.mode).toBe("static-metadata");
+    expect(report.pageMetadataCandidates).toHaveLength(1);
+    expect(report.staticContentCandidates!.length).toBeGreaterThan(0);
+  });
+
+  it("a layout-owned region is always a top-level singleton spanning its subtree's routes — even with one page", async () => {
+    await write("layout.tsx", LAYOUT_WITH_FOOTER);
+    await write("page.tsx", `export default function Home() { return <main>home</main>; }`);
+
+    const report = await runScan({ appDir, projectRoot: root, mode: "static-metadata" });
+    const footer = report.staticContentCandidates!.find((c) => c.regionHint.includes("footer"));
+    expect(footer).toBeDefined();
+    expect(footer!.scope).toBe("top-level-singleton");
+    expect(footer!.usedOnRoutes).toEqual(["/"]);
+    expect(footer!.section).toBe("layout");
+
+    // With a second page, the layout spans both routes.
+    await write("about/page.tsx", `export default function About() { return <main>about</main>; }`);
+    const report2 = await runScan({ appDir, projectRoot: root, mode: "static-metadata" });
+    const footer2 = report2.staticContentCandidates!.find((c) => c.regionHint.includes("footer"));
+    expect(footer2!.usedOnRoutes.sort()).toEqual(["/", "/about"]);
+  });
+
+  it("layout metadata is reported as unanalyzable (site-wide, not per-page importable)", async () => {
+    await write("layout.tsx", LAYOUT_WITH_FOOTER);
+    await write("page.tsx", `export default function Home() { return <main>home</main>; }`);
+
+    const report = await runScan({ appDir, projectRoot: root, mode: "collections-metadata" });
+    expect(report.pageMetadataCandidates).toEqual([]);
+    expect(report.pageMetadataUnanalyzable).toHaveLength(1);
+    expect(report.pageMetadataUnanalyzable![0]!.reason).toContain("layout-level metadata");
+  });
+
+  it("records an entrypoints summary and keeps `pages` page-only", async () => {
+    await write("layout.tsx", LAYOUT_WITH_FOOTER);
+    await write("page.tsx", `export default function Home() { return <main>home</main>; }`);
+    await write("about/page.tsx", `export default function About() { return <main>about</main>; }`);
+
+    const report = await runScan({ appDir, projectRoot: root, mode: "collections" });
+    expect(report.pages.map((p) => p.routePath).sort()).toEqual(["/", "/about"]);
+    const layout = report.entrypoints!.find((e) => e.kind === "layout")!;
+    expect(layout.routes.sort()).toEqual(["/", "/about"]);
+  });
+
+  it("a layout whose subtree has no pages is skipped entirely", async () => {
+    await write("empty/layout.tsx", LAYOUT_WITH_FOOTER);
+    await write("page.tsx", `export default function Home() { return <main>home</main>; }`);
+
+    const report = await runScan({ appDir, projectRoot: root, mode: "static-metadata" });
+    expect(report.entrypoints!.some((e) => e.kind === "layout")).toBe(false);
+    expect(report.staticContentCandidates!.some((c) => c.regionHint.includes("footer"))).toBe(false);
+  });
+
+  it("strips @slot segments from route derivation", async () => {
+    await write("dash/@sidebar/page.tsx", `export default function Sidebar() { return <aside>side</aside>; }`);
+    await write("dash/page.tsx", `export default function Dash() { return <main>dash</main>; }`);
+
+    const report = await runScan({ appDir, projectRoot: root, mode: "collections" });
+    expect([...new Set(report.pages.map((p) => p.routePath))]).toEqual(["/dash"]);
+  });
+});
+
+describe("CI helpers — portable report and exit codes", () => {
+  const base: ScanReport = {
+    reportVersion: 1,
+    mode: "static-metadata",
+    generatedAt: "2026-07-16T00:00:00.000Z",
+    appDir: "/proj/src/app",
+    pages: [{ pagePath: "/proj/src/app/page.tsx", routePath: "/" }],
+    entrypoints: [{ filePath: "/proj/src/app/layout.tsx", kind: "layout", routes: ["/"] }],
+    collectionCandidates: [],
+    unanalyzable: [],
+    staticContentCandidates: [],
+    staticUnanalyzable: [],
+    pageMetadataCandidates: [],
+    pageMetadataUnanalyzable: [],
+  };
+
+  it("toPortableReport rewrites every path project-root-relative with posix separators", () => {
+    const portable = toPortableReport(
+      {
+        ...base,
+        unanalyzable: [
+          { variableName: "x", sourceFile: "/proj/src/app/page.tsx", declarationFile: "/proj/src/data/x.ts", section: "page", reason: "r", usedOnRoutes: ["/"] },
+        ],
+      },
+      "/proj",
+    );
+    expect(portable.appDir).toBe("src/app");
+    expect(portable.pages[0]!.pagePath).toBe("src/app/page.tsx");
+    expect(portable.entrypoints![0]!.filePath).toBe("src/app/layout.tsx");
+    expect(portable.unanalyzable[0]!.sourceFile).toBe("src/app/page.tsx");
+    expect(portable.unanalyzable[0]!.declarationFile).toBe("src/data/x.ts");
+  });
+
+  it("exit code is 0 only when there are no candidates AND no unanalyzable detections", () => {
+    expect(scanFindingsExitCode(base)).toBe(0);
+    expect(
+      scanFindingsExitCode({
+        ...base,
+        pageMetadataUnanalyzable: [{ sourceFile: "/f", routePath: "/", reason: "r", nodeStart: 0, nodeEnd: 1 }],
+      }),
+    ).toBe(1);
+    expect(
+      scanFindingsExitCode({
+        ...base,
+        pageMetadataCandidates: [{ sourceFile: "/f", routePath: "/", title: "t", nodeStart: 0, nodeEnd: 1 }],
+      }),
+    ).toBe(1);
+  });
+
+  it("formatScanSummaryLine names each bucket", () => {
+    const line = formatScanSummaryLine(base);
+    expect(line).toContain("static-metadata");
+    expect(line).toContain("0 collection candidate(s), 0 static, 0 metadata, 0 not import-eligible");
   });
 });

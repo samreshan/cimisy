@@ -1,6 +1,7 @@
 import type { NormalizedSingleton } from "../config/define-config.js";
 import type { ChangeAuthor, ChangeResult, StorageAdapter } from "../storage/types.js";
 import { parseSingleton, serializeSingleton } from "./singleton-codec.js";
+import { validateFieldValues } from "./validate-values.js";
 
 export interface SingletonSnapshot {
   version: string;
@@ -42,7 +43,7 @@ export async function writeSingleton(
   def: NormalizedSingleton,
   input: WriteSingletonInput,
 ): Promise<ChangeResult> {
-  const content = serializeSingleton(def, input.values);
+  const content = serializeSingleton(def, validateFieldValues(def.schema, input.values));
   return adapter.commitChange({
     ref: input.ref,
     baseVersion: input.baseVersion,

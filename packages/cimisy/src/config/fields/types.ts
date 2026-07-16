@@ -11,7 +11,8 @@ export interface FieldDefinition<T = unknown> {
   readonly kind: string;
   readonly label: string;
   readonly location: FieldLocation;
-  readonly zodSchema: z.ZodType<T>;
+  /** Input is `unknown` (not `T`) so schemas with `.default(...)` — whose input type is `T | undefined` — remain assignable; the parsed output is still `T`. */
+  readonly zodSchema: z.ZodType<T, unknown>;
 }
 
 export type InferField<F> = F extends FieldDefinition<infer T> ? T : never;

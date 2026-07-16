@@ -84,11 +84,26 @@ export type ContentTreeNode =
   | { kind: "singleton"; key: string; label: string }
   | { kind: "page"; key: string; label: string; route?: string; children: ContentTreeNode[] };
 
+/**
+ * Defaults for the `cimisy scan` CLI, read *statically* from the config
+ * file (see scan/config-detection.ts's detectScanConfig — the CLI never
+ * executes the config). Both values must be plain literals in the config
+ * source to take effect; a `--mode` CLI flag always wins over `mode` here.
+ */
+export interface ScanConfig {
+  /** Scan depth — see scan/modes.ts. Defaults to "collections". */
+  mode?: "collections" | "collections-metadata" | "static" | "static-metadata";
+  /** appDir-relative path prefixes to skip during entrypoint discovery, e.g. ["admin", "(marketing)/legal"]. */
+  exclude?: string[];
+}
+
 export interface CimisyConfig {
   source: StorageAdapter;
   collections?: Record<string, CollectionDefinition<Record<string, FieldDefinition>>>;
   singletons?: Record<string, SingletonDefinition<Record<string, FieldDefinition>>>;
   pages?: Record<string, PageDefinition>;
+  /** Defaults for the `cimisy scan` CLI — has no effect on the runtime admin/Reader. */
+  scan?: ScanConfig;
   /** Defaults to DEFAULT_ROLES if omitted. */
   roles?: Record<string, RoleDefinition>;
   /**

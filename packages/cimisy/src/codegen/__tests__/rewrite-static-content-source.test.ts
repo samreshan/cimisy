@@ -46,7 +46,7 @@ describe("rewriteStaticContentSource", () => {
     assertNoSyntaxErrors(result);
     expect(result).not.toContain("Welcome");
     expect(result).toContain("{heroContent.heading}");
-    expect(result).toContain("cimisyReader.pages.home.hero.get()");
+    expect(result).toContain('(cimisyReader.pages.home.hero as import("cimisy/next").SingletonReader).get()');
     expect(result).toContain("export default async function Home()");
     expect(result).toContain('import { createReader } from "cimisy/next";');
     expect(result).toContain('import cimisyConfig from "../../cimisy.config";');

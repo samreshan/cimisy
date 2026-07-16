@@ -10,9 +10,10 @@ export type {
   ResolvedCimisyConfig,
   RoleDefinition,
   RoleRule,
+  ScanConfig,
 } from "./define-config.js";
 export { blocks, fields } from "./fields/index.js";
-export type { BlockDefinition, BlockNode, BlocksFieldDefinition, FieldDefinition, FieldLocation } from "./fields/index.js";
+export type { BlockDefinition, BlockNode, BlocksFieldDefinition, FieldDefinition, FieldLocation, SeoValue } from "./fields/index.js";
 export { page } from "./page.js";
 export type { PageDefinition, PageOptions } from "./page.js";
 export { section } from "./section.js";

@@ -269,3 +269,31 @@ describe("buildAdminManifest — route grouping", () => {
     expect(Object.keys(manifest.byKey)).not.toContain("__route:/blog");
   });
 });
+
+describe("buildAdminManifest — text validation projection", () => {
+  it("copies isRequired/maxLength through to the field manifest, omitting them when absent", () => {
+    const cfg = config({
+      source: new LocalStorageAdapter({ rootDir: "/tmp/cimisy-manifest-test", allowInProduction: true }),
+      collections: {
+        posts: collection({
+          label: "Posts",
+          path: "content/posts/*.mdx",
+          slugField: "slug",
+          schema: {
+            title: fields.text({ label: "Title", validation: { isRequired: true, maxLength: 80 } }),
+            subtitle: fields.text({ label: "Subtitle" }),
+            slug: fields.slug({ source: "title" }),
+          },
+        }),
+      },
+    });
+    const manifest = buildAdminManifest(cfg);
+    const posts = manifest.byKey["posts"]!;
+    const title = posts.fields.find((f) => f.name === "title")!;
+    expect(title.required).toBe(true);
+    expect(title.maxLength).toBe(80);
+    const subtitle = posts.fields.find((f) => f.name === "subtitle")!;
+    expect(subtitle.required).toBeUndefined();
+    expect(subtitle.maxLength).toBeUndefined();
+  });
+});

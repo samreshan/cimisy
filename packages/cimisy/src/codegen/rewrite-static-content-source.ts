@@ -53,6 +53,9 @@ function tsTypeForStaticField(kind: StaticFieldProposalKind): string {
       return "string | null";
     case "blocks":
       return "import(\"cimisy/config\").BlockNode[]";
+    // "seo" never reaches this codemod (it's the metadata importer's kind — see rewrite-page-metadata.ts), but the switch must stay exhaustive.
+    case "seo":
+      return "import(\"cimisy/config\").SeoValue";
   }
 }
 
@@ -64,6 +67,8 @@ function fallbackLiteralForStaticField(kind: StaticFieldProposalKind): string {
       return "null";
     case "blocks":
       return "[]";
+    case "seo":
+      return "{}";
   }
 }
 
@@ -75,12 +80,16 @@ function buildFallbackObjectLiteral(fields: StaticFieldProposal[]): string {
   return `{ ${fields.map((f) => `${objectKeyFor(f.name)}: ${fallbackLiteralForStaticField(f.proposedKind)}`).join(", ")} }`;
 }
 
-function readerGetExpression(readerPath: ReaderPath): string {
+function readerGetExpression(readerPath: ReaderPath, useTypeCast: boolean): string {
   if (readerPath.kind === "singleton") {
     return `${propertyAccess("cimisyReader.singletons", readerPath.key)}.get()`;
   }
   const pageAccess = propertyAccess("cimisyReader.pages", readerPath.pageKey);
-  return `${propertyAccess(pageAccess, readerPath.sectionKey)}.get()`;
+  const sectionAccess = propertyAccess(pageAccess, readerPath.sectionKey);
+  // PageReader types sections as `CollectionReader | SingletonReader` (see
+  // next/reader.ts), so TS files need the SingletonReader assertion for
+  // `.get()` to typecheck; JS files pass the union through untyped.
+  return useTypeCast ? `(${sectionAccess} as import("cimisy/next").SingletonReader).get()` : `${sectionAccess}.get()`;
 }
 
 function fetchReplacementLines(
@@ -93,7 +102,7 @@ function fetchReplacementLines(
 ): string {
   const fallback = buildFallbackObjectLiteral(proposalFields);
   const castSuffix = useTypeCast ? ` as ${buildValuesCastType(proposalFields)}` : "";
-  const fetchLine = `const ${variableName} = ((await ${readerGetExpression(readerPath)})?.values${castSuffix}) ?? ${fallback};`;
+  const fetchLine = `const ${variableName} = ((await ${readerGetExpression(readerPath, useTypeCast)})?.values${castSuffix}) ?? ${fallback};`;
   return skipReaderBootstrap ? fetchLine : [`const cimisyReader = createReader(cimisyConfig);`, `${indent}${fetchLine}`].join("\n");
 }
 

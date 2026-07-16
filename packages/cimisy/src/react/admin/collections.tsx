@@ -84,18 +84,30 @@ export function EntryList({
   apiBasePath: string;
 }) {
   const [entries, setEntries] = useState<EntrySummaryLike[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setError(null);
+    setEntries(null);
     fetch(apiUrl(apiBasePath, `/collections/${collection.key}`))
-      .then((res) => res.json())
-      .then((data: { entries: EntrySummaryLike[] }) => {
-        if (!cancelled) setEntries(data.entries);
+      .then(async (res) => {
+        const data = (await res.json()) as { entries?: EntrySummaryLike[]; error?: string };
+        if (cancelled) return;
+        if (!res.ok || !Array.isArray(data.entries)) {
+          setError(data.error ?? "Failed to load entries.");
+          return;
+        }
+        setEntries(data.entries);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Failed to load entries.");
       });
     return () => {
       cancelled = true;
     };
-  }, [collection.key, apiBasePath]);
+  }, [collection.key, apiBasePath, reloadKey]);
 
   return (
     <div>
@@ -106,7 +118,14 @@ export function EntryList({
       <a className="cimisy-btn cimisy-btn-primary" href={`${basePath}/${collection.key}/new`} style={{ marginBottom: 20 }}>
         + New
       </a>
-      {entries === null ? (
+      {error ? (
+        <div className="cimisy-banner cimisy-banner-danger">
+          {error}{" "}
+          <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={() => setReloadKey((k) => k + 1)}>
+            Retry
+          </button>
+        </div>
+      ) : entries === null ? (
         <p className="cimisy-muted">Loading…</p>
       ) : entries.length === 0 ? (
         <p className="cimisy-empty">No entries yet.</p>

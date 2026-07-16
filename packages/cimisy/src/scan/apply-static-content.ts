@@ -28,7 +28,7 @@ export interface ApplyStaticCandidateResult {
   rewrittenSourceFile: string;
 }
 
-function buildRuntimeField(field: StaticFieldProposal, contentKey: string): FieldDefinition {
+export function buildRuntimeField(field: StaticFieldProposal, contentKey: string): FieldDefinition {
   switch (field.proposedKind) {
     case "text":
       return fields.text({ label: field.label });
@@ -36,6 +36,8 @@ function buildRuntimeField(field: StaticFieldProposal, contentKey: string): Fiel
       return fields.image({ label: field.label, directory: `public/images/${contentKey}` });
     case "blocks":
       return fields.blocks({ label: field.label, blocks: { paragraph: blocks.paragraph() } });
+    case "seo":
+      return fields.seo();
   }
 }
 

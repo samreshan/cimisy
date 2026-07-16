@@ -426,6 +426,16 @@ a.cimisy-card:hover {
   background: var(--cimisy-surface-2);
   color: var(--cimisy-text);
 }
+.cimisy-btn-danger {
+  background: var(--cimisy-surface);
+  border-color: var(--cimisy-danger);
+  color: var(--cimisy-danger);
+}
+.cimisy-btn-danger:hover:not(:disabled) {
+  background: var(--cimisy-danger);
+  border-color: var(--cimisy-danger);
+  color: var(--cimisy-on-accent);
+}
 
 .cimisy-field {
   margin-bottom: 18px;
@@ -462,6 +472,19 @@ a.cimisy-card:hover {
 .cimisy-input[type="text"].cimisy-input-mono,
 .cimisy-textarea-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.cimisy-required-marker {
+  color: var(--cimisy-danger);
+  margin-left: 3px;
+}
+.cimisy-field-error {
+  color: var(--cimisy-danger);
+  font-size: 0.85em;
+  margin: 6px 0 0;
+}
+.cimisy-input[aria-invalid="true"],
+.cimisy-textarea[aria-invalid="true"] {
+  border-color: var(--cimisy-danger);
 }
 
 /* The entry's title field (collection.slugField) rendered as a borderless hero, not a boxed
