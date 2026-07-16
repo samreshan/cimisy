@@ -83,7 +83,7 @@
     "@clack/prompts": "^1.7.0",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
-    "@tiptap/core": "^3.27.0",
+    "@tiptap/core": "^3.28.0",
     "@tiptap/extension-link": "^3.27.0",
     "@tiptap/extension-placeholder": "^3.27.0",
     "@tiptap/pm": "^3.27.0",
