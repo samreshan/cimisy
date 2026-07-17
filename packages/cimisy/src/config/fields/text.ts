@@ -3,11 +3,14 @@ import type { FieldDefinition } from "./types.js";
 
 export interface TextFieldOptions {
   label: string;
+  /** Render as a multi-row <textarea> instead of a single-line input. Purely presentational — storage and validation are identical to a single-line text field. */
+  multiline?: boolean;
   validation?: { isRequired?: boolean; maxLength?: number };
 }
 
 export interface TextFieldDefinition extends FieldDefinition<string> {
   readonly kind: "text";
+  readonly multiline?: boolean;
   readonly validation?: { isRequired?: boolean; maxLength?: number };
 }
 
@@ -24,6 +27,7 @@ export function text(options: TextFieldOptions): TextFieldDefinition {
     label: options.label,
     location: "frontmatter",
     zodSchema,
+    ...(options.multiline ? { multiline: true } : {}),
     validation: options.validation,
   };
 }

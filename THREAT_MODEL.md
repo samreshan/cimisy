@@ -72,7 +72,16 @@ cimisy installs directly into a Next.js app and holds write credentials to the a
 **Mitigation:** `content/codec.ts` uses `yaml`'s `parseDocument` (not the lenient `parse` shortcut) and treats **any** warning — not just hard errors — as a rejection. Found during M1 testing that `parse()` silently tolerates unresolvable tags like `!!js/function` (inert under the Core schema, but too permissive for a security-first parser); fixed to fail closed.
 **Verified by:** `codec.test.ts`.
 
-### 14. Supply chain
+### 14. In-admin scan/import — an authenticated admin request that rewrites source files
+The dev-only scan surface (`POST /scan`, `GET /scan/report`, `POST /scan/import` in `next/route-handler.ts`) is a genuinely new class of endpoint: it doesn't write *content*, it rewrites the project's *source code* (pages, components, `cimisy.config.ts`) and creates git branches. Left open on a deployed server, it would be an attacker's shortcut from "compromised admin session" to "arbitrary code committed into the app".
+**Mitigation (layered):**
+- **Existence gate:** all three routes return 404 unless the storage adapter is the local adapter (`source.kind === "local"`) **and** `NODE_ENV !== "production"` — the same conditions under which the source checkout is, by definition, the developer's own machine. The gate is checked server-side per request (`scanSurfaceAvailable`), independently of the manifest flag that merely hides the UI.
+- **CSRF:** both `POST` routes require same-origin (`requireSameOrigin`), and share the identity-keyed write rate limit.
+- **No client-supplied code paths:** imports are addressed by kind+index into the server's own cached report (`.cimisy/scan-report.json`); the request body never carries file paths, offsets, or candidate objects. A stale index fails the whole request before any write.
+- **Git safety rails (shared with the CLI, `scan/git.ts`):** refuse outside a git repository, refuse on a dirty working tree unless explicitly overridden, and write only on a fresh `cimisy/import-<timestamp>` branch — every change is reviewable and revertible before it can land.
+**Verified by:** `next/__tests__/scan-routes.test.ts` (gate under github source, gate under `NODE_ENV=production`, cross-origin rejection, not-a-repo refusal, stale-selection refusal, end-to-end branch import).
+
+### 15. Supply chain
 **Mitigation:** Dependencies are pinned via a committed lockfile. JWT construction and installation-token exchange are delegated to `@octokit/auth-app` rather than hand-rolled — reusing a well-audited, widely-used library for exactly the kind of code where a subtle bug is catastrophic. CI dependency scanning and CodeQL are described in the repo's `.github/workflows/`.
 
 ## Accepted risks / explicitly out of scope for v1

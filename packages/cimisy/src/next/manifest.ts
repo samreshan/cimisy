@@ -1,5 +1,8 @@
+import type { ArrayFieldDefinition } from "../config/fields/array.js";
 import type { BlocksFieldDefinition } from "../config/fields/blocks.js";
 import type { ImageFieldDefinition } from "../config/fields/image.js";
+import type { NumberFieldDefinition } from "../config/fields/number.js";
+import type { SelectFieldDefinition } from "../config/fields/select.js";
 import type { SeoFieldDefinition } from "../config/fields/seo.js";
 import type { TextFieldDefinition } from "../config/fields/text.js";
 import type { FieldDefinition } from "../config/fields/types.js";
@@ -23,9 +26,18 @@ export interface FieldManifest {
   blockTypes?: BlockTypeManifest[];
   /** Present for kind === "image" (and kind === "seo" when it configures one) — the repo-relative directory uploads through this field must land under (see content/media.ts's assertConfiguredDirectory). */
   directory?: string;
-  /** Present for kind === "text" when the field declared validation — drives the admin's required marker, maxLength attribute, and pre-submit checks. The server re-validates regardless (content/validate-values.ts). */
+  /** Present for kind === "text"/"number"/"select" when the field declared validation — drives the admin's required marker, maxLength attribute, and pre-submit checks. The server re-validates regardless (content/validate-values.ts). */
   required?: boolean;
   maxLength?: number;
+  /** kind === "text" only: render as a textarea. */
+  multiline?: boolean;
+  /** kind === "select" only: the allowed values, in display order. */
+  options?: string[];
+  /** kind === "number" only. */
+  min?: number;
+  max?: number;
+  /** kind === "array" only: the wrapped item field (its own manifest, so per-item inputs render by kind). */
+  item?: FieldManifest;
 }
 
 export interface CollectionManifest {
@@ -74,17 +86,42 @@ export interface AdminManifest {
   byKey: Record<string, EntityManifest>;
   /** Whether the storage adapter supports pull requests (see storage/types.ts's capabilities.pullRequests) — drives whether the admin UI shows the Drafts screen at all. */
   draftsSupported: boolean;
+  /** Whether the dev-only scan/import screen is available — local adapter outside production only, mirroring route-handler.ts's scanSurfaceAvailable gate. Never true on a deployed server. */
+  scanSupported: boolean;
 }
 
 function buildFieldManifest(fieldName: string, fieldDef: FieldDefinition): FieldManifest {
   const base: FieldManifest = { name: fieldName, kind: fieldDef.kind, label: fieldDef.label };
   if (fieldDef.kind === "text") {
-    const validation = (fieldDef as TextFieldDefinition).validation;
+    const textDef = fieldDef as TextFieldDefinition;
+    return {
+      ...base,
+      ...(textDef.multiline ? { multiline: true } : {}),
+      ...(textDef.validation?.isRequired ? { required: true } : {}),
+      ...(textDef.validation?.maxLength ? { maxLength: textDef.validation.maxLength } : {}),
+    };
+  }
+  if (fieldDef.kind === "number") {
+    const validation = (fieldDef as NumberFieldDefinition).validation;
     return {
       ...base,
       ...(validation?.isRequired ? { required: true } : {}),
-      ...(validation?.maxLength ? { maxLength: validation.maxLength } : {}),
+      ...(validation?.min !== undefined ? { min: validation.min } : {}),
+      ...(validation?.max !== undefined ? { max: validation.max } : {}),
     };
+  }
+  if (fieldDef.kind === "select") {
+    const selectDef = fieldDef as SelectFieldDefinition;
+    return {
+      ...base,
+      options: selectDef.options,
+      ...(selectDef.validation?.isRequired ? { required: true } : {}),
+    };
+  }
+  if (fieldDef.kind === "array") {
+    const itemField = (fieldDef as ArrayFieldDefinition).itemField;
+    // Pre-2.4 array definitions (from a stale built config) may lack itemField — fall back to a text item, the only shape they could have had.
+    return { ...base, item: itemField ? buildFieldManifest(`${fieldName}-item`, itemField) : { name: `${fieldName}-item`, kind: "text", label: base.label } };
   }
   if (fieldDef.kind === "image") {
     return { ...base, directory: (fieldDef as ImageFieldDefinition).directory };
@@ -237,5 +274,13 @@ export function buildAdminManifest(cimisyConfig: ResolvedCimisyConfig): AdminMan
     return entityFor(node.kind, node.key);
   });
 
-  return { tree: groupTopLevelByRoute(tree), byKey, draftsSupported: cimisyConfig.source.capabilities.pullRequests };
+  return {
+    tree: groupTopLevelByRoute(tree),
+    byKey,
+    draftsSupported: cimisyConfig.source.capabilities.pullRequests,
+    // Server-computed (this runs in CimisyAdminPage, a server component), so
+    // the client can't decide for itself that scanning is available — and the
+    // API routes re-check the same condition regardless (route-handler.ts).
+    scanSupported: cimisyConfig.source.kind === "local" && process.env.NODE_ENV !== "production",
+  };
 }

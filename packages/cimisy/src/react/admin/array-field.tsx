@@ -1,12 +1,13 @@
 import type { FieldManifest } from "../../next/manifest.js";
 
+type ItemValue = string | number | null;
+
 /**
- * The `fields.array()` editor. Every array field in practice wraps
- * `fields.text()` items (see config/fields/array.ts + scan/apply.ts's
- * inferred-field heuristic and codegen/insert-collection-config.ts, which
- * only ever emit `fields.array(fields.text(...))`), so this renders a
- * plain reorderable list of text inputs rather than trying to generalize
- * to arbitrary item field kinds.
+ * The `fields.array()` editor. The item input renders by the wrapped item
+ * field's kind (see FieldManifest.item — text, multiline text, number,
+ * select); anything more exotic (image/blocks/seo items) isn't a shape
+ * `fields.array()` produces today and falls back to a text input rather
+ * than an error.
  */
 export function ArrayField({
   field,
@@ -15,11 +16,18 @@ export function ArrayField({
 }: {
   field: FieldManifest;
   value: unknown;
-  onChange: (value: string[]) => void;
+  onChange: (value: ItemValue[]) => void;
 }) {
-  const items = Array.isArray(value) ? value.map((item) => (typeof item === "string" ? item : "")) : [];
+  const item = field.item;
+  const itemKind = item?.kind ?? "text";
+  const items: ItemValue[] = Array.isArray(value)
+    ? value.map((v) => (typeof v === "string" || typeof v === "number" ? v : itemKind === "number" ? null : ""))
+    : [];
 
-  function updateItem(index: number, next: string) {
+  function emptyItem(): ItemValue {
+    return itemKind === "number" ? null : "";
+  }
+  function updateItem(index: number, next: ItemValue) {
     const copy = items.slice();
     copy[index] = next;
     onChange(copy);
@@ -38,6 +46,60 @@ export function ArrayField({
     onChange(copy);
   }
 
+  function renderItemInput(itemValue: ItemValue, index: number) {
+    if (itemKind === "number") {
+      return (
+        <input
+          className="cimisy-input"
+          type="number"
+          value={typeof itemValue === "number" ? itemValue : ""}
+          min={item?.min}
+          max={item?.max}
+          onChange={(e) => updateItem(index, e.target.value === "" ? null : Number(e.target.value))}
+          aria-label={`${field.label} item ${index + 1}`}
+        />
+      );
+    }
+    if (itemKind === "select") {
+      return (
+        <select
+          className="cimisy-select"
+          value={typeof itemValue === "string" ? itemValue : ""}
+          onChange={(e) => updateItem(index, e.target.value)}
+          aria-label={`${field.label} item ${index + 1}`}
+        >
+          <option value="">—</option>
+          {(item?.options ?? []).map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    if (itemKind === "text" && item?.multiline) {
+      return (
+        <textarea
+          className="cimisy-textarea"
+          rows={3}
+          value={typeof itemValue === "string" ? itemValue : ""}
+          onChange={(e) => updateItem(index, e.target.value)}
+          aria-label={`${field.label} item ${index + 1}`}
+        />
+      );
+    }
+    return (
+      <input
+        className="cimisy-input"
+        type="text"
+        value={typeof itemValue === "string" ? itemValue : ""}
+        maxLength={item?.maxLength}
+        onChange={(e) => updateItem(index, e.target.value)}
+        aria-label={`${field.label} item ${index + 1}`}
+      />
+    );
+  }
+
   return (
     <div className="cimisy-field">
       <label className="cimisy-label">{field.label}</label>
@@ -46,20 +108,15 @@ export function ArrayField({
           No items yet.
         </p>
       )}
-      {items.map((item, index) => (
-        <div key={index} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <input
-            className="cimisy-input"
-            type="text"
-            value={item}
-            onChange={(e) => updateItem(index, e.target.value)}
-          />
+      {items.map((itemValue, index) => (
+        <div key={index} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "flex-start" }}>
+          {renderItemInput(itemValue, index)}
           <button
             type="button"
             className="cimisy-btn cimisy-btn-ghost"
             onClick={() => moveItem(index, -1)}
             disabled={index === 0}
-            aria-label="Move up"
+            aria-label={`Move ${field.label} item ${index + 1} up`}
           >
             &uarr;
           </button>
@@ -68,16 +125,21 @@ export function ArrayField({
             className="cimisy-btn cimisy-btn-ghost"
             onClick={() => moveItem(index, 1)}
             disabled={index === items.length - 1}
-            aria-label="Move down"
+            aria-label={`Move ${field.label} item ${index + 1} down`}
           >
             &darr;
           </button>
-          <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={() => removeItem(index)}>
+          <button
+            type="button"
+            className="cimisy-btn cimisy-btn-ghost"
+            onClick={() => removeItem(index)}
+            aria-label={`Remove ${field.label} item ${index + 1}`}
+          >
             Remove
           </button>
         </div>
       ))}
-      <button type="button" className="cimisy-btn cimisy-btn-secondary" onClick={() => onChange([...items, ""])}>
+      <button type="button" className="cimisy-btn cimisy-btn-secondary" onClick={() => onChange([...items, emptyItem()])}>
         + Add
       </button>
     </div>

@@ -116,7 +116,7 @@ export function inferStaticSchema(candidate: StaticContentCandidate): StaticSche
   return { fields, format: richParagraphs.length > 0 ? "mdx" : "yaml", fieldAssignments };
 }
 
-const RESERVED_TOP_LEVEL_KEYS = new Set(["team", "drafts", "pages", "new"]);
+const RESERVED_TOP_LEVEL_KEYS = new Set(["team", "drafts", "pages", "new", "scan", "media"]);
 
 /** Mirrors define-config.ts's claimKey reservations (kept separate/duplicated on purpose, same posture as its own KEY_SEGMENT_PATTERN comment) so scan-time reports the same refusal apply-time would hit, instead of letting a user pick a candidate that fails later with a raw config-time error. */
 export function assertKeyAllowed(key: string): void {

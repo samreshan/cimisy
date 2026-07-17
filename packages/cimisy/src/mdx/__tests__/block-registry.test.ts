@@ -76,10 +76,29 @@ describe("block registry round-trips", () => {
     });
   });
 
-  it("heading: level and text survive round-trip", () => {
+  it("heading: level and content survive round-trip", () => {
     const registry = { heading: heading() };
-    const { parsed } = roundTrip([{ type: "heading", id: "1", props: { level: 3, text: "Section Title" } }], registry);
-    expect(parsed[0]?.props).toEqual({ level: 3, text: "Section Title" });
+    const content = [{ type: "text", text: "Section Title" }];
+    const { parsed } = roundTrip([{ type: "heading", id: "1", props: { level: 3, content } }], registry);
+    expect(parsed[0]?.props).toEqual({ level: 3, content });
+  });
+
+  it("heading: bold/italic/link inline formatting survives serialize -> parse (rich text)", () => {
+    const registry = { heading: heading() };
+    const content = [
+      { type: "text", text: "A " },
+      { type: "strong", children: [{ type: "text", text: "bold" }] },
+      { type: "text", text: " " },
+      { type: "link", href: "https://example.com/", children: [{ type: "emphasis", children: [{ type: "text", text: "link" }] }] },
+    ];
+    const { parsed } = roundTrip([{ type: "heading", id: "1", props: { level: 2, content } }], registry);
+    expect(parsed[0]?.props).toEqual({ level: 2, content });
+  });
+
+  it("heading: an old 2.3 { level, text } payload is upgraded to { level, content } on write (back-compat shim)", () => {
+    const registry = { heading: heading() };
+    const { parsed } = roundTrip([{ type: "heading", id: "1", props: { level: 3, text: "Legacy" } }], registry);
+    expect(parsed[0]?.props).toEqual({ level: 3, content: [{ type: "text", text: "Legacy" }] });
   });
 
   it("heading: rejects a level outside the configured allowlist", () => {
