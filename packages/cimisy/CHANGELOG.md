@@ -1,5 +1,93 @@
 # cimisy
 
+## 2.4.1
+
+### Patch Changes
+
+- 54ed19b: Three-step onboarding: `cimisy scan --full` → `cimisy import` → `cimisy setup`.
+
+  - New `cimisy setup` command auto-scaffolds what the quickstart used to ask you to write by hand: `cimisy.config.*` (when `cimisy import` hasn't already created it), the admin UI page at `app/(cimisy)/admin/[[...segments]]/page.tsx`, and the API route at `app/api/cimisy/[...route]/route.ts`. It detects `app/` vs `src/app/`, TypeScript vs plain-JavaScript projects, and tsconfig path aliases (emitting `@/cimisy.config`-style imports when an alias covers the config, relative imports otherwise). It never overwrites existing files — including an admin page you hand-mounted outside the `(cimisy)` route group — so re-running it is always safe.
+  - `cimisy scan --full` is un-deprecated: it's now the blessed shorthand for `--mode=static-metadata` (no warning), since it's step 1 of the flow.
+  - `scan` and `import` now point to the next step in the flow, and stop suggesting `cimisy setup` once both routes exist.
+
+## 2.4.0
+
+### Minor Changes
+
+- 6762233: Admin UI/UX overhaul plus a dev-only in-admin scan/import surface — v2.4.0.
+
+  **Scan & import without leaving the admin (local dev only).**
+
+  - A new **Scan** screen (`/admin/scan`) runs the whole-site scanner in-process and imports selected candidates — mode picker for all four scan depths, results grouped exactly like the CLI report (collection / static / metadata candidates plus every "not import-eligible" bucket with reasons), checkboxes, and one "Import selected" action with per-candidate success/failure output.
+  - **Exists only where it can't hurt anyone**: the API routes (`POST /scan`, `GET /scan/report`, `POST /scan/import`) and the nav item appear only with the local adapter outside `NODE_ENV=production` — everywhere else they 404, indistinguishable from not existing. Writes require same-origin and share the write rate limit; selections address the server's own cached report by index, never client-supplied candidates.
+  - Import safety mirrors the CLI exactly (shared code in `scan/git.ts`, extracted from the CLI rather than copied): refuses outside a git repo, refuses on a dirty working tree (with an explicit "import anyway" override), and writes only on a fresh `cimisy/import-<timestamp>` branch. After an import the screen marks the cached report stale and requires a re-scan before importing again (byte offsets no longer match the rewritten sources). The scan stack is dynamic-imported so the TypeScript compiler never loads on ordinary admin requests. THREAT_MODEL.md documents the new surface.
+  - `scan` and `media` are now reserved top-level content keys (config() rejects them; the scanner's key-derivation mirror refuses them too).
+
+  **New field types.**
+
+  - **`fields.boolean()`** — a real YAML boolean. The scanner now proposes it for boolean values (and `fields.number()` for numeric values), which removes the old "booleans stored as `"true"`/`"false"` strings invert your truthy checks" import caveat entirely.
+  - **`fields.number()`** — with optional `isRequired`/`min`/`max` validation; optional fields default to `null`.
+  - **`fields.select()`** — one-of-a-fixed-set strings, rendered as a dropdown.
+  - **`fields.text({ multiline: true })`** — renders a textarea; storage identical to text.
+  - **`fields.array()` generalized** — the wrapped item field's kind now reaches the admin (manifest `item`), so arrays of numbers, selects, and multiline text get proper per-item inputs instead of assuming text.
+
+  **Editor experience.**
+
+  - **Autosaved local drafts**: unsaved edits are debounce-snapshotted to localStorage per entry; on the next load a "Restore unsaved draft?" gate offers them back (crash/battery/force-quit insurance — complements the existing beforeunload guard). Snapshots clear on save/delete/discard.
+  - **Cmd/Ctrl+S saves** in the entry and singleton forms.
+  - **Drag-and-drop block reordering** in the block editor's outline list (move buttons stay as the keyboard-accessible path, now with proper aria-labels).
+  - **Headings are rich text**: bold/italic/inline-code/links inside headings now round-trip — the heading block schema moved from `{level, text}` to `{level, content: InlineNode[]}` (same shape as paragraphs; a back-compat shim upgrades in-flight 2.3 payloads, and on-disk files need no migration).
+  - **Callout tone is switchable live in the editor** — the tone select in the callout node is no longer disabled.
+  - **Honest live preview labeling**: the preview pane now says "last saved version" with a "save to update" badge while dirty, instead of an ambiguous "draft" chip.
+
+  **Media library.** A standalone **Media** screen (`/admin/media`): browse every configured image directory, upload via button or drag-and-drop (multi-file, with progress state), copy a file's path for reuse, and delete (optimistic-concurrency-checked `DELETE /media`, confined to configured image directories). Library writes with no entry context ride the reserved `media/library` draft target, so editor-role uploads still land on a reviewable branch. `POST /media` accordingly accepts uploads without `targetKey`/`slug` (both-or-neither enforced).
+
+  **Visual polish & responsiveness.**
+
+  - Loading skeletons (layout-preserving, reduced-motion aware) replace every bare "Loading…" paragraph across the admin.
+  - Phone-width layout: the nav links wrap into their own scrollable row, grids/paddings/title hero scale down, team rows stack.
+  - The blanket `.cimisy-root * { transition: … }` rule is gone — transitions are scoped to interactive elements, plus a global `prefers-reduced-motion` kill switch.
+  - Accessibility pass: `role="alert"`/`role="status"` on the remaining banners, meaningful alt text on media thumbnails, labeled icon-only (↑/↓/Remove) buttons, announced loading states.
+  - Richer empty states with CTAs (first-entry create, media upload hints), and dashboard cards now show field counts.
+  - **Entry lists scale**: search, sort (title/slug), and 25-per-page pagination appear once a collection outgrows a handful of entries.
+
+  **Onboarding.**
+
+  - Zero-content dashboard becomes a getting-started state (with a "Scan this project" CTA in local dev); when a cached scan report has importable findings, the dashboard nudges "the last scan found N importable pieces — review & import".
+  - `githubSource()` now fails at config load with the exact missing credential names and their env-var spellings (`CIMISY_GITHUB_APP_ID`, …) instead of an opaque mid-request 500; a failing `/auth/me` shows the server's message instead of falling through to the sign-in gate.
+  - The draft branch chip explains itself on hover, and the Drafts screen states what a draft is.
+
+## 2.3.0
+
+### Minor Changes
+
+- 4e8d421: Whole-site static scan (modes, metadata import, CI gate) plus four data-loss-grade admin fixes.
+
+  **`cimisy scan` covers the whole site, in four selectable depths.**
+
+  - **Every App Router entrypoint is scanned** — not just `page.*` files: `layout.*`, `template.*`, `not-found.*`, `loading.*`, `error.*`, and `global-error.*` (plus pages inside `@slot` parallel-route directories; `(.)`-style intercepting-route dirs are skipped). A layout's content spans every page route in its subtree, and regions found _only_ via layout/template files are always proposed as shared top-level singletons — even on a single route, nesting them under that page would orphan them the moment a second page appears. Route derivation now strips `@slot` segments like route groups.
+  - **Four scan modes replace the boolean `--full`**: `collections` (default), `collections-metadata`, `static`, `static-metadata`. Select with `--mode=<mode>`, or set a default in `cimisy.config.ts` via the new `scan: { mode, exclude }` key (read statically — literals only, the CLI never executes your config; `exclude` skips appDir-relative path prefixes at discovery). Precedence: `--mode` > config > default. `--full` still works as a deprecated alias for `--mode=static-metadata` and prints a notice.
+  - **Page metadata is now importable, not report-only.** `cimisy import` offers `export const metadata = { title, description, openGraph: { url } }` candidates: it inserts a `seo: section({ schema: { seo: fields.seo() } })` under the page's config entry (sharing one `page()` with any static sections imported for the same route), writes the values as YAML through the same validated write path the admin uses, and replaces the statement with a `generateMetadata()` reading it back via `createMetadata()`. Offsets are re-derived at apply time, so it coexists with other candidates edited into the same file in one run.
+  - **The metadata analyzer is hardened for deletion-safety**: metadata with properties `fields.seo()` can't store (`keywords`, `robots`, `openGraph.images`, …), divergent `openGraph.title`/`description`, non-object-literal initializers, and existing `generateMetadata()` exports are all reported as not import-eligible instead of silently tolerated; `satisfies Metadata` wrappers are unwrapped.
+  - **CI mode**: `cimisy scan --ci` exits 0 only when nothing was found (unanalyzable detections count — they're still hardcoded content), 1 on findings, 2 on scan failure, with a one-line summary on stderr. `--json` prints the full report to stdout with project-root-relative paths (the on-disk `.cimisy/scan-report.json` cache keeps absolute paths so `cimisy import` keeps working). Reports now carry `mode` and `reportVersion`.
+  - Fixed a latent type error in the static-content codemod: generated `cimisyReader.pages.<key>.<section>.get()` didn't typecheck in strict TS projects (`PageReader` values are `CollectionReader | SingletonReader`); TS rewrites now emit a `SingletonReader` assertion.
+
+  **Admin fixes (all four are data-loss-grade):**
+
+  - **Saves are validated before they're written.** Previously the write path ran no field validation at all — a save violating `isRequired`/`maxLength` succeeded and produced an entry that could never be loaded again. Field zod schemas now gate `writeEntry`/`writeSingleton`, failures return the existing `{ error, issues }` 400 with field-prefixed issue paths, and the admin shows the message inline on the offending input (plus required markers, `maxLength`, and a pre-submit required check). Optional text/image/array fields left untouched now round-trip via schema defaults (`""` / `null` / `[]`) instead of writing unreadable files — and a YAML _sequence_ document no longer sneaks past the "must be a mapping" check as all-defaults.
+  - **Unsaved changes are guarded.** Navigating away from an edited entry/singleton (link click, tab close, reload) now asks for confirmation instead of silently discarding edits.
+  - **Entries can be deleted from the UI.** The DELETE API existed but nothing called it. The editor now has a two-step confirm delete that sends `baseVersion` (real 409 conflict handling); direct-publish roles return to the list, draft roles stay put with a "deletion opened as a draft PR" banner and link, since the entry remains published until the PR merges.
+  - **Failed loads show errors with a Retry button** instead of hanging forever: the entry list (which also crashed with a TypeError on a non-OK response body), the history panel, and the admin shell's own `/auth/me` check (one flaky request used to brick the whole admin on "Loading…").
+
+## 2.2.7
+
+### Patch Changes
+
+- 0902b35: Fix two more `cimisy import` correctness bugs found running it against a real app:
+
+  - **Codegen had zero awareness of `"use client"`.** `createReader` (`cimisy/next`) imports the `server-only` package, and every codemod path made the rewritten component's default export `async` — both are outright incompatible with a Client Component (`server-only` cannot load in a client bundle at all, and React doesn't support async Client Components regardless). `cimisy scan`/`cimisy import` now detect a file's `"use client"` directive and report its candidates as unanalyzable (`this file is a Client Component...`) instead of rewriting it into a page-breaking 500. Splitting such a file into a Server Component wrapper + inner Client Component is a bigger follow-up, not done here — this stops the crash safely in the meantime.
+  - **Boolean fields were coerced to text with the same generic note as numbers.** cimisy has no boolean field type, so a scanned `isPlaceholder: true` was proposed as `fields.text()` and stored as the literal string `"true"`/`"false"` — but unlike a number, this isn't display-safe: any non-empty string (including `"false"`) is truthy in JS, so a pre-existing `{field && <Badge/>}` check would render for both values after migrating, silently inverting whatever `false` meant. Boolean fields now get a distinct, explicit warning about this in the scan report, instead of the same "will be stored as text" note used for numbers.
+
 ## 2.2.6
 
 ### Patch Changes
