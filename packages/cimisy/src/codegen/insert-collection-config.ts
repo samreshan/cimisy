@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { RESERVED_TOP_LEVEL_KEYS } from "../config/define-config.js";
 import type { FieldProposal, ProposedFieldKind, CollectionSchemaProposal } from "../scan/infer-schema.js";
 import { objectKeyFor, propertyKeyText } from "./source-edit-utils.js";
 
@@ -15,6 +16,27 @@ export function humanizeLabel(name: string): string {
   const withSpaces = name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ");
   const trimmed = withSpaces.trim();
   return trimmed.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * A scanned variable name is a JS identifier (`POSTS`, `teamMembers`,
+ * `BLOG_POSTS`) but config keys must satisfy define-config's
+ * KEY_SEGMENT_PATTERN (lowercase/digits/single-hyphens — they become URLs
+ * and git branch components) and must not shadow a reserved admin screen.
+ * Import must normalize here, or it writes a config that cimisy's own
+ * runtime refuses to load.
+ */
+export function toCollectionKey(variableName: string): string {
+  const key = variableName
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2") // acronym runs: APIRoutes → API-Routes
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2") // camelCase boundaries
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-") // underscores & anything else → hyphen
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 100)
+    .replace(/-+$/, "");
+  const fallback = key || "imported";
+  return RESERVED_TOP_LEVEL_KEYS.has(fallback) ? `${fallback}-collection` : fallback;
 }
 
 function fieldFactoryCall(field: FieldProposal, collectionName: string): string {

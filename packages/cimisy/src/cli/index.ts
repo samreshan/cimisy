@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { humanizeLabel } from "../codegen/insert-collection-config.js";
+import { humanizeLabel, toCollectionKey } from "../codegen/insert-collection-config.js";
 import { applyCandidate } from "../scan/apply.js";
 import { applyPageMetadataCandidate } from "../scan/apply-page-metadata.js";
 import { applyStaticCandidate } from "../scan/apply-static-content.js";
@@ -192,7 +192,7 @@ async function runImportCommand(projectRoot: string, args: string[]): Promise<vo
     const index = Number(indexText);
     if (kind === "collection") {
       const candidate = report.collectionCandidates[index]!;
-      const collectionName = candidate.variableName;
+      const collectionName = toCollectionKey(candidate.variableName);
       const spin = clack.spinner();
       spin.start(`Importing ${collectionName}...`);
       try {

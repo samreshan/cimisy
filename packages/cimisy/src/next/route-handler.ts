@@ -877,7 +877,7 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
           import("../codegen/insert-collection-config.js"),
         ]),
       ]);
-      const [{ applyCandidate }, { applyStaticCandidate }, { applyPageMetadataCandidate }, { humanizeLabel }] = applies;
+      const [{ applyCandidate }, { applyStaticCandidate }, { applyPageMetadataCandidate }, { humanizeLabel, toCollectionKey }] = applies;
 
       const cachePath = report_.defaultReportPath(projectRoot);
       if (!(await config_.pathExists(cachePath))) {
@@ -936,12 +936,13 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
           const candidate = report.collectionCandidates[selection.index]!;
           const label = candidate.variableName;
           try {
+            const collectionName = toCollectionKey(candidate.variableName);
             const result = await applyCandidate({
               candidate,
               configFilePath,
-              collectionName: candidate.variableName,
+              collectionName,
               collectionLabel: humanizeLabel(candidate.variableName),
-              contentPath: `${candidate.variableName}/*.mdx`,
+              contentPath: `${collectionName}/*.mdx`,
             });
             const failed = result.items.filter((i) => i.error);
             results.push({
