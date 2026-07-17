@@ -118,8 +118,33 @@ export const ADMIN_THEME_CSS = `
 .cimisy-root *::after {
   box-sizing: inherit;
 }
-.cimisy-root * {
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+/* Scoped to the elements that actually change on hover/focus/theme-toggle —
+   a previous ".cimisy-root *" rule put a transition on every element, which
+   made the whole UI feel faintly laggy and forced the compositor to consider
+   thousands of nodes on each theme switch. */
+.cimisy-btn,
+.cimisy-card,
+.cimisy-nav-link,
+.cimisy-link,
+.cimisy-input,
+.cimisy-textarea,
+.cimisy-select,
+.cimisy-theme-toggle,
+.cimisy-bubble-btn,
+.cimisy-slash-menu-item,
+.cimisy-scan-candidate,
+.cimisy-seo-toggle,
+.cimisy-dropzone,
+.cimisy-block-outline-item {
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cimisy-root *,
+  .cimisy-root *::before,
+  .cimisy-root *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 
 .cimisy-nav {
@@ -473,6 +498,19 @@ a.cimisy-card:hover {
 .cimisy-textarea-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+.cimisy-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.95em;
+  color: var(--cimisy-text);
+}
+.cimisy-toggle-label input[type="checkbox"] {
+  accent-color: var(--cimisy-accent);
+  width: 16px;
+  height: 16px;
+}
 .cimisy-required-marker {
   color: var(--cimisy-danger);
   margin-left: 3px;
@@ -794,9 +832,27 @@ a.cimisy-card:hover {
   justify-content: space-between;
   padding: 6px 10px;
   border-bottom: 1px solid var(--cimisy-border);
+  cursor: grab;
 }
 .cimisy-block-outline-item:last-child {
   border-bottom: none;
+}
+.cimisy-block-outline-item.is-dragging {
+  opacity: 0.5;
+}
+.cimisy-block-outline-item.is-drop-target {
+  box-shadow: inset 0 2px 0 var(--cimisy-accent);
+}
+.cimisy-block-outline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.cimisy-drag-handle {
+  color: var(--cimisy-text-faint);
+  font-size: 0.8em;
+  cursor: grab;
 }
 
 /* --- Live preview pane (M7) --- */
@@ -925,6 +981,236 @@ a.cimisy-card:hover {
   flex-wrap: wrap;
 }
 
+/* --- Dev-only scan/import screen --- */
+
+.cimisy-scan-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 18px 0;
+  padding: 14px 16px;
+  background: var(--cimisy-surface);
+  border: 1px solid var(--cimisy-border);
+  border-radius: var(--cimisy-radius-lg);
+}
+.cimisy-scan-section {
+  margin: 22px 0;
+}
+.cimisy-scan-candidate {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: var(--cimisy-surface);
+  border: 1px solid var(--cimisy-border);
+  border-radius: var(--cimisy-radius-md);
+  cursor: pointer;
+}
+.cimisy-scan-candidate:hover {
+  border-color: var(--cimisy-border-strong);
+}
+.cimisy-scan-candidate.is-selected {
+  border-color: var(--cimisy-accent);
+  background: var(--cimisy-accent-soft);
+}
+.cimisy-scan-candidate input[type="checkbox"] {
+  margin-top: 3px;
+  accent-color: var(--cimisy-accent);
+}
+.cimisy-scan-candidate-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.cimisy-scan-candidate-meta {
+  font-size: 0.82em;
+  overflow-wrap: anywhere;
+}
+.cimisy-scan-candidate-fields {
+  font-size: 0.78em;
+  color: var(--cimisy-text-soft);
+  background: var(--cimisy-surface-2);
+  border-radius: var(--cimisy-radius-sm);
+  padding: 3px 7px;
+  align-self: flex-start;
+  overflow-wrap: anywhere;
+}
+.cimisy-scan-ineligible {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.88em;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* --- Form header/action rows (previously repeated inline styles) --- */
+
+.cimisy-form-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cimisy-form-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* --- Entry list controls (search/sort/pagination) & dashboard entity cards --- */
+
+.cimisy-list-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0 12px;
+}
+.cimisy-list-controls .cimisy-input {
+  flex: 1;
+}
+.cimisy-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 16px 0;
+}
+.cimisy-entity-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cimisy-entity-card-title {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cimisy-entity-card-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+/* --- Media library --- */
+
+.cimisy-dropzone {
+  border: 2px dashed var(--cimisy-border-strong);
+  border-radius: var(--cimisy-radius-lg);
+  padding: 18px;
+  text-align: center;
+  color: var(--cimisy-text-soft);
+  font-size: 0.9em;
+  margin: 14px 0;
+}
+.cimisy-dropzone.is-drag-over {
+  border-color: var(--cimisy-accent);
+  background: var(--cimisy-accent-soft);
+  color: var(--cimisy-accent-text);
+}
+.cimisy-media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.cimisy-media-card {
+  margin: 0;
+  background: var(--cimisy-surface);
+  border: 1px solid var(--cimisy-border);
+  border-radius: var(--cimisy-radius-md);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cimisy-media-card img {
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  border-radius: var(--cimisy-radius-sm);
+  background: var(--cimisy-surface-2);
+}
+.cimisy-media-card figcaption {
+  font-size: 0.78em;
+  color: var(--cimisy-text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cimisy-media-card-actions {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+/* --- Loading skeletons (replace bare "Loading…" text; sized to the content
+   they stand in for so the swap doesn't shift layout) --- */
+
+@keyframes cimisy-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.cimisy-skeleton {
+  background: var(--cimisy-surface-2);
+  border-radius: var(--cimisy-radius-md);
+  animation: cimisy-skeleton-pulse 1.4s ease-in-out infinite;
+}
+.cimisy-skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 20px 0;
+}
+.cimisy-skeleton-card {
+  height: 52px;
+  border-radius: var(--cimisy-radius-lg);
+}
+.cimisy-skeleton-line {
+  height: 14px;
+  max-width: 480px;
+}
+.cimisy-skeleton-input {
+  height: 40px;
+  max-width: 620px;
+}
+.cimisy-skeleton-title {
+  height: 40px;
+  max-width: 380px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cimisy-skeleton {
+    animation: none;
+  }
+}
+
+/* --- Rich empty states (a titled card with a CTA slot, replacing single-line
+   "No entries yet." paragraphs) --- */
+
+.cimisy-empty-state {
+  text-align: center;
+  padding: 36px 24px;
+  background: var(--cimisy-surface);
+  border: 1px dashed var(--cimisy-border-strong);
+  border-radius: var(--cimisy-radius-lg);
+  margin: 20px 0;
+}
+.cimisy-empty-state-title {
+  font-family: var(--cimisy-font-display);
+  font-weight: 600;
+  font-size: 1.05em;
+  margin: 0 0 6px;
+}
+.cimisy-empty-state .cimisy-btn {
+  margin-top: 14px;
+}
+
 /* Below this width a side-by-side split leaves neither column usable — stack instead. */
 @media (max-width: 860px) {
   .cimisy-entry-layout {
@@ -940,6 +1226,59 @@ a.cimisy-card:hover {
   .cimisy-action-bar {
     flex-direction: column;
     align-items: stretch;
+  }
+}
+
+/* Phone-width layout: the nav wraps into two rows (links get a full-width
+   scrollable row of their own), paddings tighten, grids narrow, and the
+   title hero scales down so long titles don't overflow. */
+@media (max-width: 640px) {
+  .cimisy-root {
+    padding: 16px 12px 64px;
+  }
+  .cimisy-nav {
+    gap: 10px;
+    margin-bottom: 18px;
+    padding-bottom: 12px;
+  }
+  .cimisy-nav-links {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .cimisy-nav-links::-webkit-scrollbar {
+    display: none;
+  }
+  .cimisy-nav-link {
+    white-space: nowrap;
+  }
+  .cimisy-heading {
+    font-size: 1.4em;
+  }
+  .cimisy-title-input {
+    font-size: 1.5em;
+  }
+  .cimisy-media-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  }
+  .cimisy-card.cimisy-team-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .cimisy-scan-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .cimisy-block-outline-item {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .cimisy-preview-iframe {
+    height: 50vh;
   }
 }
 `;

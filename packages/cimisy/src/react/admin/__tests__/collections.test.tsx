@@ -8,7 +8,7 @@ function render(manifest: AdminManifest): string {
 }
 
 function manifestWithTree(tree: ManifestTreeNode[]): AdminManifest {
-  return { tree, byKey: {}, draftsSupported: false };
+  return { tree, byKey: {}, draftsSupported: false, scanSupported: false };
 }
 
 describe("ContentTree page-group static/collection separation", () => {

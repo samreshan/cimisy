@@ -149,6 +149,36 @@ describe("media routes (/media, /media/raw)", () => {
       expect(Buffer.from(bytes).toString("base64")).toBe(PNG_BASE64);
     });
 
+    it("a library upload (no targetKey/slug) works and uses the reserved media/library draft target for editors", async () => {
+      seedRoster(fake, [{ githubId: "2", githubLogin: "editor-user", role: "editor" }]);
+      const cookie = await sessionCookieFor("editor-user", "2");
+      const res = await handler.POST(
+        req("http://x/api/cimisy/media", {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ directory: "content/uploads", filename: "lib.png", content: PNG_BASE64 }),
+        }),
+        { params: Promise.resolve({ route: ["media"] }) },
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { path: string; publish: { status: string; branch?: string } };
+      expect(body.publish.status).toBe("draft");
+      expect(body.publish.branch).toBe("cimisy/editor-user/media/library");
+    });
+
+    it("rejects targetKey without slug (and vice versa) with 400", async () => {
+      const cookie = await adminCookie();
+      const res = await handler.POST(
+        req("http://x/api/cimisy/media", {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ targetKey: "posts", directory: "content/uploads", filename: "a.png", content: PNG_BASE64 }),
+        }),
+        { params: Promise.resolve({ route: ["media"] }) },
+      );
+      expect(res.status).toBe(400);
+    });
+
     it("rejects an upload targeting a content key that isn't declared in config with 404", async () => {
       const cookie = await adminCookie();
       const res = await handler.POST(
@@ -263,6 +293,73 @@ describe("media routes (/media, /media/raw)", () => {
       expect(first.status).toBe(200);
       const second = await uploadReq();
       expect(second.status).toBe(429);
+    });
+  });
+
+  describe("DELETE /media (media library delete)", () => {
+    async function uploadOne(cookie: string): Promise<{ path: string; version: string }> {
+      const uploadRes = await handler.POST(
+        req("http://x/api/cimisy/media", {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ directory: "content/uploads", filename: "doomed.png", content: PNG_BASE64 }),
+        }),
+        { params: Promise.resolve({ route: ["media"] }) },
+      );
+      const { path } = (await uploadRes.json()) as { path: string };
+      const listRes = await handler.GET(
+        req("http://x/api/cimisy/media?directory=content/uploads", { headers: { cookie } }),
+        { params: Promise.resolve({ route: ["media"] }) },
+      );
+      const { files } = (await listRes.json()) as { files: Array<{ path: string; version: string }> };
+      return files.find((f) => f.path === path)!;
+    }
+
+    it("deletes an uploaded file with the version it was listed at", async () => {
+      const cookie = await adminCookie();
+      const file = await uploadOne(cookie);
+      const res = await handler.DELETE(
+        req("http://x/api/cimisy/media", {
+          method: "DELETE",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ path: file.path, baseVersion: file.version }),
+        }),
+        { params: Promise.resolve({ route: ["media"] }) },
+      );
+      expect(res.status).toBe(200);
+      const listRes = await handler.GET(
+        req("http://x/api/cimisy/media?directory=content/uploads", { headers: { cookie } }),
+        { params: Promise.resolve({ route: ["media"] }) },
+      );
+      const { files } = (await listRes.json()) as { files: Array<{ path: string }> };
+      expect(files.some((f) => f.path === file.path)).toBe(false);
+    });
+
+    it("409s when the version doesn't match (stale list)", async () => {
+      const cookie = await adminCookie();
+      const file = await uploadOne(cookie);
+      const res = await handler.DELETE(
+        req("http://x/api/cimisy/media", {
+          method: "DELETE",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ path: file.path, baseVersion: "not-the-version" }),
+        }),
+        { params: Promise.resolve({ route: ["media"] }) },
+      );
+      expect(res.status).toBe(409);
+    });
+
+    it("blocks deleting a path outside every configured image directory (e.g. the roster file)", async () => {
+      const cookie = await adminCookie();
+      const res = await handler.DELETE(
+        req("http://x/api/cimisy/media", {
+          method: "DELETE",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ path: ".cimisy/users.yaml", baseVersion: "whatever" }),
+        }),
+        { params: Promise.resolve({ route: ["media"] }) },
+      );
+      expect(res.status).toBe(400);
     });
   });
 

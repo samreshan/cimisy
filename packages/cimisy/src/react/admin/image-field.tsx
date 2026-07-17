@@ -109,12 +109,16 @@ export function ImageField({
   return (
     <div className="cimisy-field">
       <label className="cimisy-label">{field.label}</label>
-      {error && <p className="cimisy-banner cimisy-banner-danger">{error}</p>}
+      {error && (
+        <p className="cimisy-banner cimisy-banner-danger" role="alert">
+          {error}
+        </p>
+      )}
       {currentPath ? (
         <div style={{ marginBottom: 10 }}>
           <img
             src={thumbnailUrl(currentPath)}
-            alt=""
+            alt={`${field.label}: ${currentPath.split("/").pop() ?? currentPath}`}
             style={{ maxWidth: 200, maxHeight: 200, display: "block", borderRadius: 8, marginBottom: 6 }}
           />
           <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={() => onChange(null)}>
@@ -164,7 +168,7 @@ export function ImageField({
             </button>
           </div>
           {existing === null ? (
-            <p className="cimisy-muted">Loading…</p>
+            <div className="cimisy-skeleton" style={{ height: 72 }} role="status" aria-label="Loading uploads" />
           ) : existing.length === 0 ? (
             <p className="cimisy-muted">No uploads yet.</p>
           ) : (
@@ -178,8 +182,13 @@ export function ImageField({
                     setBrowsing(false);
                   }}
                   style={{ border: "none", background: "none", padding: 0, cursor: "pointer" }}
+                  aria-label={`Use ${f.path.split("/").pop() ?? f.path}`}
                 >
-                  <img src={thumbnailUrl(f.path)} alt="" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 6 }} />
+                  <img
+                    src={thumbnailUrl(f.path)}
+                    alt={f.path.split("/").pop() ?? f.path}
+                    style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 6 }}
+                  />
                 </button>
               ))}
             </div>

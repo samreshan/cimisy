@@ -58,9 +58,16 @@ export function TeamPage({ basePath, apiBasePath, isAdmin }: { basePath: string;
         <p className="cimisy-banner cimisy-banner-danger">Only admins can manage the team.</p>
       ) : (
         <>
-          {error && <p className="cimisy-banner cimisy-banner-danger">{error}</p>}
+          {error && (
+            <p className="cimisy-banner cimisy-banner-danger" role="alert">
+              {error}
+            </p>
+          )}
           {users === null ? (
-            <p className="cimisy-muted">Loading…</p>
+            <div className="cimisy-skeleton-stack" role="status" aria-label="Loading team">
+              <div className="cimisy-skeleton cimisy-skeleton-card" />
+              <div className="cimisy-skeleton cimisy-skeleton-card" />
+            </div>
           ) : users.length === 0 ? (
             <p className="cimisy-empty">No one has signed in yet.</p>
           ) : (

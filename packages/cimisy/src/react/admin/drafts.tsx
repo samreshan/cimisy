@@ -69,10 +69,23 @@ export function DraftsPage({ manifest, basePath, apiBasePath }: { manifest: Admi
       <a className="cimisy-crumb cimisy-link" href={basePath}>
         &larr; Content
       </a>
-      <h1 className="cimisy-heading">Drafts</h1>
-      {error && <p className="cimisy-banner cimisy-banner-danger">{error}</p>}
+      <h1 className="cimisy-heading" style={{ marginBottom: 8 }}>
+        Drafts
+      </h1>
+      <p className="cimisy-muted" style={{ marginTop: 0, maxWidth: "62ch" }}>
+        A draft is an unpublished change saved on its own git branch with a pull request. Merging here (or on GitHub)
+        publishes it; until then the live site is untouched.
+      </p>
+      {error && (
+        <p className="cimisy-banner cimisy-banner-danger" role="alert">
+          {error}
+        </p>
+      )}
       {drafts === null ? (
-        <p className="cimisy-muted">Loading…</p>
+        <div className="cimisy-skeleton-stack" role="status" aria-label="Loading drafts">
+          <div className="cimisy-skeleton cimisy-skeleton-card" />
+          <div className="cimisy-skeleton cimisy-skeleton-card" />
+        </div>
       ) : drafts.length === 0 ? (
         <p className="cimisy-empty">No open drafts.</p>
       ) : (

@@ -1,24 +1,22 @@
 #!/usr/bin/env node
 import * as clack from "@clack/prompts";
-import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
 import { humanizeLabel } from "../codegen/insert-collection-config.js";
 import { applyCandidate } from "../scan/apply.js";
 import { applyPageMetadataCandidate } from "../scan/apply-page-metadata.js";
 import { applyStaticCandidate } from "../scan/apply-static-content.js";
-import { detectScanConfig, pathExists as configPathExists, resolveConfigFilePath, type ScanConfigDetection } from "../scan/config-detection.js";
+import { resolveConfigFilePath, type ScanConfigDetection } from "../scan/config-detection.js";
+import { createImportBranch, DIRTY_TREE_MESSAGE, isGitRepo, isWorkingTreeClean, NOT_A_GIT_REPO_MESSAGE } from "../scan/git.js";
 import { DEFAULT_SCAN_MODE, isScanMode, SCAN_MODES, type ScanMode } from "../scan/modes.js";
+import { readScanConfig, runProjectScan } from "../scan/run-project-scan.js";
 import {
   defaultReportPath,
   formatScanSummaryLine,
   loadScanReport,
   printScanReport,
-  runScan,
-  saveScanReport,
   scanFindingsExitCode,
   toPortableReport,
   type StaticContentCandidateReport,
@@ -31,33 +29,6 @@ async function pathExists(candidate: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function findAppDir(projectRoot: string): Promise<string> {
-  const candidates = [path.join(projectRoot, "src", "app"), path.join(projectRoot, "app")];
-  for (const candidate of candidates) {
-    if (await pathExists(candidate)) return candidate;
-  }
-  throw new Error(
-    `Could not find an App Router "app" directory under ${projectRoot} (looked for src/app and app). ` +
-      `The Pages Router (pages/) is not supported by "cimisy scan" yet.`,
-  );
-}
-
-/** Reads tsconfig.json's compilerOptions.paths (e.g. "@/*": ["./src/*"]) via the TS compiler API, which tolerates comments/trailing commas that plain JSON.parse would choke on. */
-async function readPathAliases(projectRoot: string): Promise<Record<string, string>> {
-  const tsconfigPath = path.join(projectRoot, "tsconfig.json");
-  if (!(await pathExists(tsconfigPath))) return {};
-
-  const { config } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
-  const paths = config?.compilerOptions?.paths as Record<string, string[]> | undefined;
-  if (!paths) return {};
-
-  const aliases: Record<string, string> = {};
-  for (const [pattern, targets] of Object.entries(paths)) {
-    if (targets[0]) aliases[pattern] = targets[0];
-  }
-  return aliases;
 }
 
 /** Thrown for CLI misuse (unknown mode, conflicting flags) — exits with code 2, distinct from a scan that ran and found candidates (see runScanCommand). */
@@ -94,15 +65,6 @@ export function resolveMode(args: string[], scanConfig: Pick<ScanConfigDetection
   return scanConfig.mode ?? DEFAULT_SCAN_MODE;
 }
 
-/** Reads the optional `scan: {...}` defaults out of cimisy.config.* — statically, without executing the config. Missing config file → no defaults. */
-async function readScanConfig(projectRoot: string): Promise<ScanConfigDetection> {
-  const configFilePath = await resolveConfigFilePath(projectRoot);
-  if (!(await configPathExists(configFilePath))) return { warnings: [] };
-  const { readFile } = await import("node:fs/promises");
-  const configText = await readFile(configFilePath, "utf8");
-  return detectScanConfig(configText, configFilePath);
-}
-
 async function runScanCommand(projectRoot: string, args: string[]): Promise<void> {
   const json = args.includes("--json");
   const ci = args.includes("--ci");
@@ -112,12 +74,9 @@ async function runScanCommand(projectRoot: string, args: string[]): Promise<void
     const scanConfig = await readScanConfig(projectRoot);
     for (const warning of scanConfig.warnings) console.error(warning);
     const mode = resolveMode(args, scanConfig);
-    const appDir = await findAppDir(projectRoot);
-    const pathAliases = await readPathAliases(projectRoot);
-    report = await runScan({ appDir, projectRoot, pathAliases, mode, exclude: scanConfig.exclude });
-
-    const cachePath = defaultReportPath(projectRoot);
-    await saveScanReport(report, cachePath);
+    const result = await runProjectScan(projectRoot, { mode });
+    report = result.report;
+    const cachePath = result.cachePath;
 
     if (json) {
       // Machine-readable to stdout, everything else to stderr — `cimisy scan --json | jq` must see pure JSON.
@@ -144,29 +103,6 @@ async function runScanCommand(projectRoot: string, args: string[]): Promise<void
   }
 }
 
-function git(args: string[], cwd: string): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
-
-function isGitRepo(cwd: string): boolean {
-  try {
-    git(["rev-parse", "--is-inside-work-tree"], cwd);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isWorkingTreeClean(cwd: string): boolean {
-  return git(["status", "--porcelain"], cwd) === "";
-}
-
-function createImportBranch(cwd: string): string {
-  const branch = `cimisy/import-${Date.now()}`;
-  git(["checkout", "-b", branch], cwd);
-  return branch;
-}
-
 async function runImportCommand(projectRoot: string, args: string[]): Promise<void> {
   const allowDirty = args.includes("--allow-dirty");
 
@@ -186,14 +122,12 @@ async function runImportCommand(projectRoot: string, args: string[]): Promise<vo
   }
 
   if (!isGitRepo(projectRoot)) {
-    console.error("cimisy import must run inside a git repository — it creates a dedicated branch before writing anything.");
+    console.error(NOT_A_GIT_REPO_MESSAGE);
     process.exitCode = 1;
     return;
   }
   if (!allowDirty && !isWorkingTreeClean(projectRoot)) {
-    console.error(
-      "Working tree has uncommitted changes. Commit or stash them first, or re-run with --allow-dirty if you understand the risk.",
-    );
+    console.error(DIRTY_TREE_MESSAGE);
     process.exitCode = 1;
     return;
   }

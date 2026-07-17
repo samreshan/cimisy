@@ -27,6 +27,9 @@ import { requireSameOrigin } from "./csrf.js";
 import { handlePreviewDisable, handlePreviewEnable } from "./draft-mode.js";
 import {
   deleteEntryBodySchema,
+  deleteMediaBodySchema,
+  runScanBodySchema,
+  scanImportBodySchema,
   setUserRoleBodySchema,
   uploadMediaBodySchema,
   writeEntryBodySchema,
@@ -36,6 +39,26 @@ import { SESSION_COOKIE_NAME, verifySessionToken } from "./session.js";
 
 /** Not a real content path — RBAC's path-glob matching treats any string the same way, and a "**" rule already matches this, so no changes needed to rbac/glob.ts. */
 const USERS_SENTINEL_PATH = "$users";
+
+/** Same sentinel convention as USERS_SENTINEL_PATH, for the scan surface's `manageSchema` checks — scan/import literally rewrites the schema (cimisy.config.ts) and source files. */
+const SCAN_SENTINEL_PATH = "$scan";
+
+/** Draft-branch target for media-library writes that have no entry context (see handleMediaUpload/handleMediaDelete). "media" is a reserved top-level key, so this never collides with real content. */
+const MEDIA_LIBRARY_TARGET = { contentKey: "media", slug: "library" } as const;
+
+/**
+ * The in-admin scan/import surface exists only where it can actually work
+ * AND can't hurt anyone: the local adapter (a writable source checkout on
+ * the same machine) outside production. A deployed server has no writable
+ * source repo to rewrite, and exposing source-rewriting endpoints from a
+ * production origin would be new attack surface for zero functionality —
+ * so in every other configuration these routes are indistinguishable from
+ * not existing (404). Mirrors buildAdminManifest's `scanSupported`, which
+ * hides the UI under the same condition.
+ */
+function scanSurfaceAvailable(cimisyConfig: ResolvedCimisyConfig): boolean {
+  return cimisyConfig.source.kind === "local" && process.env.NODE_ENV !== "production";
+}
 
 function errorResponse(err: unknown): NextResponse {
   if (err instanceof NotFoundError) return NextResponse.json({ error: err.message }, { status: 404 });
@@ -616,7 +639,6 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
       await enforceWriteRateLimit(cimisyConfig, actor);
 
       const body = await parseJsonBody(request, uploadMediaBodySchema);
-      assertSafeSlug(body.slug);
       const configuredDirectories = getConfiguredImageDirectories(cimisyConfig);
       assertConfiguredDirectory(body.directory, configuredDirectories);
 
@@ -624,11 +646,26 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
       const path = buildMediaPath(body.directory, body.filename, type.extension);
       actor.requirePermission("write", path);
 
-      if (!cimisyConfig.collectionsByKey[body.targetKey] && !cimisyConfig.singletonsByKey[body.targetKey]) {
-        return NextResponse.json({ error: `Unknown content key "${body.targetKey}"` }, { status: 404 });
+      // No entry context (the standalone media library) → the reserved
+      // "media"/"library" target, so a draft-role user's upload still lands
+      // on a reviewable branch instead of being refused. "media" is a
+      // reserved top-level key (define-config.ts), so this can never
+      // collide with real content.
+      let targetKey: string = MEDIA_LIBRARY_TARGET.contentKey;
+      let slug: string = MEDIA_LIBRARY_TARGET.slug;
+      if (body.targetKey !== undefined || body.slug !== undefined) {
+        if (body.targetKey === undefined || body.slug === undefined) {
+          throw new ValidationError("targetKey and slug must be sent together (or both omitted).", null);
+        }
+        assertSafeSlug(body.slug);
+        if (!cimisyConfig.collectionsByKey[body.targetKey] && !cimisyConfig.singletonsByKey[body.targetKey]) {
+          return NextResponse.json({ error: `Unknown content key "${body.targetKey}"` }, { status: 404 });
+        }
+        targetKey = body.targetKey;
+        slug = body.slug;
       }
 
-      const { ref, publish } = await resolveWriteRef(actor, body.targetKey, body.slug);
+      const { ref, publish } = await resolveWriteRef(actor, targetKey, slug);
 
       const result = await cimisyConfig.source.commitChange({
         ref,
@@ -641,6 +678,45 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
         return NextResponse.json({ error: "A file with this name already exists — please try again." }, { status: 409 });
       }
       return NextResponse.json({ path, contentType: type.contentType, publish });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  /**
+   * Deletes one uploaded file — the standalone media library's delete
+   * action. Confined to configured image directories (same as reads: RBAC
+   * alone must never turn this into a generic repo-file-deletion
+   * endpoint), optimistic-concurrency-checked against the version the
+   * client saw, and routed through the same draft-vs-direct envelope as
+   * every other write.
+   */
+  async function handleMediaDelete(request: NextRequest): Promise<NextResponse> {
+    try {
+      requireSameOrigin(request);
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      await enforceWriteRateLimit(cimisyConfig, actor);
+
+      const body = await parseJsonBody(request, deleteMediaBodySchema);
+      assertSafeRepoPath(body.path);
+      const configuredDirectories = getConfiguredImageDirectories(cimisyConfig);
+      assertPathUnderConfiguredDirectory(body.path, configuredDirectories);
+      actor.requirePermission("write", body.path);
+
+      const { ref, publish } = await resolveWriteRef(actor, MEDIA_LIBRARY_TARGET.contentKey, MEDIA_LIBRARY_TARGET.slug);
+      const result = await cimisyConfig.source.commitChange({
+        ref,
+        baseVersion: body.baseVersion,
+        message: `Delete ${body.path}`,
+        author: actor.author,
+        writes: [],
+        deletes: [body.path],
+      });
+      if (result.conflict) {
+        return NextResponse.json({ error: "This file changed since you loaded the list — refresh and try again." }, { status: 409 });
+      }
+      return NextResponse.json({ ok: true, publish });
     } catch (err) {
       return errorResponse(err);
     }
@@ -711,6 +787,204 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
     }
   }
 
+  /**
+   * The dev-only scan surface (see scanSurfaceAvailable above). All three
+   * handlers dynamic-import the scan stack — it pulls in the TypeScript
+   * compiler, which must never be loaded (or even module-initialized) on
+   * an ordinary admin request, only when a developer actually uses the
+   * scan screen. Failures out of the scan itself (no app/ directory, an
+   * unreadable tsconfig) are returned with their real messages: this
+   * surface only exists on a developer's own machine, so "don't leak
+   * internals" doesn't apply the way it does for errorResponse's generic
+   * 500 — the message IS the fix.
+   */
+  async function handleScanRun(request: NextRequest): Promise<NextResponse> {
+    try {
+      if (!scanSurfaceAvailable(cimisyConfig)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      requireSameOrigin(request);
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      actor.requirePermission("manageSchema", SCAN_SENTINEL_PATH);
+      await enforceWriteRateLimit(cimisyConfig, actor);
+
+      const body = await parseJsonBody(request, runScanBodySchema);
+      const projectRoot = process.cwd();
+      const [{ runProjectScan }, { toPortableReport }] = await Promise.all([
+        import("../scan/run-project-scan.js"),
+        import("../scan/report.js"),
+      ]);
+      try {
+        const { report, warnings } = await runProjectScan(projectRoot, { mode: body.mode });
+        return NextResponse.json({ report: toPortableReport(report, projectRoot), warnings });
+      } catch (scanErr) {
+        return NextResponse.json({ error: scanErr instanceof Error ? scanErr.message : String(scanErr) }, { status: 400 });
+      }
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  /** Returns the last cached scan report (`.cimisy/scan-report.json`), path-relativized for display; `report: null` when no scan has run yet. */
+  async function handleScanReport(request: NextRequest): Promise<NextResponse> {
+    try {
+      if (!scanSurfaceAvailable(cimisyConfig)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      actor.requirePermission("manageSchema", SCAN_SENTINEL_PATH);
+
+      const projectRoot = process.cwd();
+      const [{ defaultReportPath, loadScanReport, toPortableReport }, { pathExists }] = await Promise.all([
+        import("../scan/report.js"),
+        import("../scan/config-detection.js"),
+      ]);
+      const cachePath = defaultReportPath(projectRoot);
+      if (!(await pathExists(cachePath))) return NextResponse.json({ report: null });
+      const report = await loadScanReport(cachePath);
+      return NextResponse.json({ report: toPortableReport(report, projectRoot) });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
+  /**
+   * Applies selected candidates from the *cached* report — never
+   * client-supplied candidate objects (the client only sends kind+index;
+   * see request-schemas.ts's scanImportBodySchema). Mirrors the CLI's
+   * runImportCommand safety rails exactly: refuse outside a git repo,
+   * refuse on a dirty working tree (unless allowDirty), and create the
+   * same `cimisy/import-<timestamp>` branch before writing anything —
+   * shared code in scan/git.ts, not a copy.
+   */
+  async function handleScanImport(request: NextRequest): Promise<NextResponse> {
+    try {
+      if (!scanSurfaceAvailable(cimisyConfig)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      requireSameOrigin(request);
+      const actor = await resolveActor(request, cimisyConfig);
+      if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      actor.requirePermission("manageSchema", SCAN_SENTINEL_PATH);
+      await enforceWriteRateLimit(cimisyConfig, actor);
+
+      const body = await parseJsonBody(request, scanImportBodySchema);
+      const projectRoot = process.cwd();
+      const [report_, git_, config_, applies] = await Promise.all([
+        import("../scan/report.js"),
+        import("../scan/git.js"),
+        import("../scan/config-detection.js"),
+        Promise.all([
+          import("../scan/apply.js"),
+          import("../scan/apply-static-content.js"),
+          import("../scan/apply-page-metadata.js"),
+          import("../codegen/insert-collection-config.js"),
+        ]),
+      ]);
+      const [{ applyCandidate }, { applyStaticCandidate }, { applyPageMetadataCandidate }, { humanizeLabel }] = applies;
+
+      const cachePath = report_.defaultReportPath(projectRoot);
+      if (!(await config_.pathExists(cachePath))) {
+        return NextResponse.json({ error: 'No scan report found. Run a scan first.' }, { status: 400 });
+      }
+      const report = await report_.loadScanReport(cachePath);
+
+      // Validate every selection against the cached report before creating
+      // the branch — a stale index (report re-run between GET and POST)
+      // must fail the whole request, not half-apply.
+      const staticCandidates = report.staticContentCandidates ?? [];
+      const metadataCandidates = report.pageMetadataCandidates ?? [];
+      for (const selection of body.selections) {
+        const pool =
+          selection.kind === "collection" ? report.collectionCandidates : selection.kind === "static" ? staticCandidates : metadataCandidates;
+        const candidate = pool[selection.index];
+        if (!candidate) {
+          return NextResponse.json(
+            { error: `Selection ${selection.kind}:${selection.index} is not in the cached report — re-run the scan and try again.` },
+            { status: 409 },
+          );
+        }
+        if (selection.kind === "metadata" && !(candidate as (typeof metadataCandidates)[number]).pageKey) {
+          return NextResponse.json(
+            { error: `Metadata candidate ${selection.index} predates metadata import (no pageKey) — re-run the scan.` },
+            { status: 409 },
+          );
+        }
+      }
+
+      if (!git_.isGitRepo(projectRoot)) {
+        return NextResponse.json({ error: git_.NOT_A_GIT_REPO_MESSAGE, code: "NOT_A_GIT_REPO" }, { status: 409 });
+      }
+      if (!body.allowDirty && !git_.isWorkingTreeClean(projectRoot)) {
+        return NextResponse.json({ error: git_.DIRTY_TREE_MESSAGE, code: "DIRTY_TREE" }, { status: 409 });
+      }
+
+      const branch = git_.createImportBranch(projectRoot);
+      const configFilePath = await config_.resolveConfigFilePath(projectRoot);
+
+      interface ImportResultItem {
+        kind: "collection" | "static" | "metadata";
+        index: number;
+        label: string;
+        ok: boolean;
+        error?: string;
+        /** Per-item failures inside a collection import (the collection itself still counts as ok when most items land). */
+        itemFailures?: Array<{ index: number; error: string }>;
+        itemsImported?: number;
+        itemsTotal?: number;
+      }
+      const results: ImportResultItem[] = [];
+
+      for (const selection of body.selections) {
+        if (selection.kind === "collection") {
+          const candidate = report.collectionCandidates[selection.index]!;
+          const label = candidate.variableName;
+          try {
+            const result = await applyCandidate({
+              candidate,
+              configFilePath,
+              collectionName: candidate.variableName,
+              collectionLabel: humanizeLabel(candidate.variableName),
+              contentPath: `${candidate.variableName}/*.mdx`,
+            });
+            const failed = result.items.filter((i) => i.error);
+            results.push({
+              kind: "collection",
+              index: selection.index,
+              label,
+              ok: true,
+              itemsImported: result.items.length - failed.length,
+              itemsTotal: result.items.length,
+              ...(failed.length > 0 ? { itemFailures: failed.map((f) => ({ index: f.index, error: f.error! })) } : {}),
+            });
+          } catch (err) {
+            results.push({ kind: "collection", index: selection.index, label, ok: false, error: err instanceof Error ? err.message : String(err) });
+          }
+          continue;
+        }
+        if (selection.kind === "metadata") {
+          const candidate = metadataCandidates[selection.index]!;
+          const label = `pages.${candidate.pageKey}.seo`;
+          try {
+            const result = await applyPageMetadataCandidate({ candidate, configFilePath });
+            results.push({ kind: "metadata", index: selection.index, label, ok: !result.error, ...(result.error ? { error: result.error } : {}) });
+          } catch (err) {
+            results.push({ kind: "metadata", index: selection.index, label, ok: false, error: err instanceof Error ? err.message : String(err) });
+          }
+          continue;
+        }
+        const candidate = staticCandidates[selection.index]!;
+        const label = candidate.proposedKey;
+        try {
+          const result = await applyStaticCandidate({ candidate, configFilePath });
+          results.push({ kind: "static", index: selection.index, label, ok: !result.error, ...(result.error ? { error: result.error } : {}) });
+        } catch (err) {
+          results.push({ kind: "static", index: selection.index, label, ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
+      return NextResponse.json({ branch, results });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+
   // Typed strictly as a Promise to match Next 15's route-handler type
   // generation (next build validates the exported GET/POST/PUT/DELETE
   // against a Promise-only `params` type). `await` also resolves a
@@ -730,6 +1004,7 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
       if (route[0] === "preview" && route[1] === "disable") return handlePreviewDisable(request);
       if (route[0] === "users") return handleUsersGet(request);
       if (route[0] === "drafts") return handleDraftsList(request);
+      if (route[0] === "scan" && route[1] === "report" && route.length === 2) return handleScanReport(request);
       if (route[0] === "media" && route[1] === "raw") return handleMediaRaw(request);
       if (route[0] === "media") return handleMediaList(request);
       if (route[0] === "singletons") {
@@ -749,6 +1024,11 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
         if (authResponse) return authResponse;
       }
       if (route[0] === "users") return handleUsersPost(request);
+      if (route[0] === "scan") {
+        if (route.length === 1) return handleScanRun(request);
+        if (route[1] === "import" && route.length === 2) return handleScanImport(request);
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
       if (route[0] === "drafts") {
         const parsed = parseDraftMergeRoute(route);
         if (!parsed) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -771,7 +1051,10 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
       }
       return handlePost(request, params);
     },
-    DELETE: async (request: NextRequest, context: { params: RouteParams }) =>
-      handleDelete(request, await context.params),
+    DELETE: async (request: NextRequest, context: { params: RouteParams }) => {
+      const params = await context.params;
+      if (params.route[0] === "media" && params.route.length === 1) return handleMediaDelete(request);
+      return handleDelete(request, params);
+    },
   };
 }

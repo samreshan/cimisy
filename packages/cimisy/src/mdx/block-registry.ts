@@ -5,14 +5,9 @@ import type { Content } from "mdast";
 // declaration generation doesn't pick up type augmentations transitively
 // from sibling files the way a whole-program `tsc` build does.
 import "mdast-util-mdx";
-import { toString as mdastToString } from "mdast-util-to-string";
 import { z } from "zod";
 import type { BlockDefinition } from "../config/fields/blocks.js";
 import { type InlineNode, inlineContentSchema, inlineFromMdast, inlineToMdast } from "./inline.js";
-
-function textNode(value: string): Content {
-  return { type: "text", value } as Content;
-}
 
 /**
  * Accepts the legacy `{ text: string }` shape (from 1.x) and upgrades it to
@@ -62,24 +57,38 @@ export interface HeadingOptions {
   levels?: Array<1 | 2 | 3 | 4 | 5 | 6>;
 }
 
-export function heading(options: HeadingOptions = {}): BlockDefinition<{ level: 1 | 2 | 3 | 4 | 5 | 6; text: string }> {
+/**
+ * Headings carry the same rich `content: InlineNode[]` as paragraphs and
+ * callouts (bold/italic/inline-code/links inside a heading are ordinary
+ * markdown) — richified in 2.4 after shipping as plain `{level, text}`;
+ * the same upgradeLegacyText shim covers in-flight 2.3 clients, and
+ * on-disk files need no migration (parse.ts rebuilds content from mdast).
+ */
+export function heading(options: HeadingOptions = {}): BlockDefinition<{ level: 1 | 2 | 3 | 4 | 5 | 6; content: InlineNode[] }> {
   const allowedLevels: number[] = options.levels ?? [1, 2, 3, 4, 5, 6];
   return {
     kind: "heading",
-    propsSchema: z
-      .object({
-        level: z
-          .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)])
-          .refine((l) => allowedLevels.includes(l), { message: `Heading level must be one of: ${allowedLevels.join(", ")}` }),
-        text: z.string(),
-      })
-      .strict(),
+    propsSchema: z.preprocess(
+      upgradeLegacyText,
+      z
+        .object({
+          level: z
+            .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)])
+            .refine((l) => allowedLevels.includes(l), { message: `Heading level must be one of: ${allowedLevels.join(", ")}` }),
+          content: inlineContentSchema,
+        })
+        .strict(),
+    ) as unknown as z.ZodType<{ level: 1 | 2 | 3 | 4 | 5 | 6; content: InlineNode[] }>,
     uiOptions: { levels: allowedLevels },
-    toMdxNode: ({ level, text }) => ({ type: "heading", depth: level, children: [textNode(text)] }) as Content,
+    richTextProp: "content",
+    toMdxNode: ({ level, content }) => ({ type: "heading", depth: level, children: inlineToMdast(content) }) as Content,
     matches: (node) => node.type === "heading",
     extractProps: (node) => {
       const depth = "depth" in node ? (node as { depth: unknown }).depth : undefined;
-      return { level: depth, text: mdastToString(node) };
+      return {
+        level: depth,
+        content: inlineFromMdast(("children" in node ? (node as unknown as { children: unknown[] }).children : []) as never),
+      };
     },
   };
 }

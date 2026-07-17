@@ -46,9 +46,10 @@ function Paragraph({ content }: { content: InlineNode[] }) {
   return createElement("p", null, renderInline(content));
 }
 
-function Heading({ level, text }: { level: number; text: string }) {
+/** `content` is the current rich shape (2.4+); plain `text` still renders for hand-constructed props in the pre-richification shape. */
+function Heading({ level, content, text }: { level: number; content?: InlineNode[]; text?: string }) {
   const tag = `h${Math.min(Math.max(Math.trunc(level), 1), 6)}` as keyof JSX.IntrinsicElements;
-  return createElement(tag, null, text);
+  return createElement(tag, null, Array.isArray(content) ? renderInline(content) : (text ?? ""));
 }
 
 function Code({ code, language }: { code: string; language?: string }) {

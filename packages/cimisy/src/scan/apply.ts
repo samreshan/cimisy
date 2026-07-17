@@ -50,6 +50,10 @@ function buildRuntimeField(field: FieldProposal, collectionName: string): FieldD
       return fields.image({ label, directory: `public/images/${collectionName}` });
     case "array-of-text":
       return fields.array(fields.text({ label }));
+    case "boolean":
+      return fields.boolean({ label });
+    case "number":
+      return fields.number({ label });
   }
 }
 
@@ -76,11 +80,17 @@ function coerceValue(rawValue: LiteralValue | undefined, field: FieldProposal): 
   if (rawValue === undefined || rawValue === null) {
     if (field.proposedKind === "array-of-text") return [];
     if (field.proposedKind === "image") return null;
+    if (field.proposedKind === "boolean") return false;
+    if (field.proposedKind === "number") return null;
     return "";
   }
   if (field.proposedKind === "array-of-text") {
     return Array.isArray(rawValue) ? rawValue.map((el) => (typeof el === "string" ? el : String(el))) : [String(rawValue)];
   }
+  // Booleans/numbers keep their real type — their field schemas store the
+  // actual YAML boolean/number, not a stringification.
+  if (field.proposedKind === "boolean") return typeof rawValue === "boolean" ? rawValue : Boolean(rawValue);
+  if (field.proposedKind === "number") return typeof rawValue === "number" ? rawValue : Number(rawValue);
   return typeof rawValue === "string" ? rawValue : String(rawValue);
 }
 
