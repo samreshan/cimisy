@@ -4,6 +4,7 @@ import {
   ensureNamedImport,
   insertCollectionIntoConfig,
   scaffoldConfigFile,
+  toCollectionKey,
   type InsertCollectionOptions,
 } from "../insert-collection-config.js";
 
@@ -160,5 +161,23 @@ describe("insertCollectionIntoConfig", () => {
     assertNoSyntaxErrors(after);
     expect(after).toContain('logo: fields.image({ label: "Logo", directory: "public/images/partners" })');
     expect(after).toContain('tags: fields.array(fields.text({ label: "Tags" }))');
+  });
+});
+
+describe("toCollectionKey", () => {
+  it("normalizes scanned variable names into valid config keys", () => {
+    expect(toCollectionKey("posts")).toBe("posts");
+    expect(toCollectionKey("POSTS")).toBe("posts");
+    expect(toCollectionKey("teamMembers")).toBe("team-members");
+    expect(toCollectionKey("BLOG_POSTS")).toBe("blog-posts");
+    expect(toCollectionKey("APIRoutes")).toBe("api-routes");
+    expect(toCollectionKey("faqItems2024")).toBe("faq-items2024");
+    expect(toCollectionKey("_private$stuff")).toBe("private-stuff");
+  });
+
+  it("dodges reserved admin screen keys and never returns an empty key", () => {
+    expect(toCollectionKey("team")).toBe("team-collection");
+    expect(toCollectionKey("MEDIA")).toBe("media-collection");
+    expect(toCollectionKey("$_")).toBe("imported");
   });
 });

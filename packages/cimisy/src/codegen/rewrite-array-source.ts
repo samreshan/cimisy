@@ -11,6 +11,7 @@ import {
   findReaderBootstrap,
   isTypeScriptFile,
   lineIndentBefore,
+  propertyAccess,
   toImportSpecifier,
   type FunctionLike,
   type TextEdit,
@@ -71,7 +72,8 @@ function fetchReplacementLines(
   skipReaderBootstrap: boolean,
 ): string {
   const castSuffix = useTypeCast ? ` as ${buildValuesCastType(fieldsProposal)}` : "";
-  const fetchLine = `const ${variableName} = (await cimisyReader.collections.${collectionName}.all()).map((entry) => entry.values${castSuffix});`;
+  // Normalized keys can contain hyphens ("blog-posts") — those need bracket access; dot access on them wouldn't even parse.
+  const fetchLine = `const ${variableName} = (await ${propertyAccess("cimisyReader.collections", collectionName)}.all()).map((entry) => entry.values${castSuffix});`;
   return skipReaderBootstrap ? fetchLine : [`const cimisyReader = createReader(cimisyConfig);`, `${indent}${fetchLine}`].join("\n");
 }
 
