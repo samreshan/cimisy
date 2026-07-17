@@ -12,6 +12,7 @@ import { resolveConfigFilePath, type ScanConfigDetection } from "../scan/config-
 import { createImportBranch, DIRTY_TREE_MESSAGE, isGitRepo, isWorkingTreeClean, NOT_A_GIT_REPO_MESSAGE } from "../scan/git.js";
 import { DEFAULT_SCAN_MODE, isScanMode, SCAN_MODES, type ScanMode } from "../scan/modes.js";
 import { readScanConfig, runProjectScan } from "../scan/run-project-scan.js";
+import { isProjectSetUp, setupProject } from "./setup-project.js";
 import {
   defaultReportPath,
   formatScanSummaryLine,
@@ -50,18 +51,15 @@ export function parseModeFlag(args: string[]): ScanMode | undefined {
   return undefined;
 }
 
-/** Precedence: `--mode` > `--full` (deprecated alias for static-metadata) > cimisy.config's scan.mode > "collections". */
+/** Precedence: `--mode` > `--full` (shorthand for static-metadata, the everything mode) > cimisy.config's scan.mode > "collections". */
 export function resolveMode(args: string[], scanConfig: Pick<ScanConfigDetection, "mode">): ScanMode {
   const modeFlag = parseModeFlag(args);
   const full = args.includes("--full");
   if (modeFlag && full) {
-    throw new CliUsageError(`--full is a deprecated alias for --mode=static-metadata — pass only --mode.`);
+    throw new CliUsageError(`--full is shorthand for --mode=static-metadata — pass one or the other, not both.`);
   }
   if (modeFlag) return modeFlag;
-  if (full) {
-    console.error(`--full is deprecated; use --mode=static-metadata (or another mode — see "cimisy help").`);
-    return "static-metadata";
-  }
+  if (full) return "static-metadata";
   return scanConfig.mode ?? DEFAULT_SCAN_MODE;
 }
 
@@ -85,7 +83,10 @@ async function runScanCommand(projectRoot: string, args: string[]): Promise<void
       console.log(`Scan mode: ${report.mode}\n`);
       console.log(printScanReport(report));
       console.log(`\nSaved machine-readable report to ${path.relative(projectRoot, cachePath)}`);
-      console.log(`Run "cimisy import" to select candidates to bring under cimisy's management.`);
+      console.log(`Next (step 2 of 3): run "cimisy import" to select candidates to bring under cimisy's management.`);
+      if (!(await isProjectSetUp(projectRoot))) {
+        console.log(`Then (step 3 of 3): run "cimisy setup" to mount the admin UI and API route.`);
+      }
     }
   } catch (err) {
     // Under --ci the scan-failed case must be distinguishable (exit 2) from "findings exist" (exit 1).
@@ -246,7 +247,29 @@ async function runImportCommand(projectRoot: string, args: string[]): Promise<vo
     }
   }
 
-  clack.outro(`Done. Review the changes with "git diff" on branch ${branch}, then commit when you're happy with them.`);
+  const setupHint = (await isProjectSetUp(projectRoot)) ? "" : ` Next (step 3 of 3): run "cimisy setup" to mount the admin UI and API route.`;
+  clack.outro(`Done. Review the changes with "git diff" on branch ${branch}, then commit when you're happy with them.${setupHint}`);
+}
+
+async function runSetupCommand(projectRoot: string): Promise<void> {
+  clack.intro("cimisy setup");
+  let result;
+  try {
+    result = await setupProject(projectRoot);
+  } catch (err) {
+    clack.log.error(err instanceof Error ? err.message : String(err));
+    clack.cancel("Setup did not complete.");
+    process.exitCode = 1;
+    return;
+  }
+  for (const action of result.actions) {
+    if (action.status === "created") clack.log.success(`created ${action.file}`);
+    else clack.log.info(`${action.file} already exists — left untouched`);
+  }
+  clack.outro(
+    `Done. Start your dev server and open /admin. ` +
+      `For production, switch the config's source to githubSource — see the cimisy README's "Using the GitHub adapter" section.`,
+  );
 }
 
 function printUsage(): void {
@@ -254,19 +277,26 @@ function printUsage(): void {
     [
       "Usage: cimisy <command>",
       "",
+      "Getting started (three steps):",
+      "  1. npx cimisy scan --full   find hardcoded content across the whole site",
+      "  2. npx cimisy import        pick candidates and move them under cimisy's management",
+      "  3. npx cimisy setup         scaffold the admin UI page and API route",
+      "",
       "Commands:",
       "  scan     Scan the app for hardcoded content and report what could move into cimisy",
+      "           --full         shorthand for --mode=static-metadata (scan everything)",
       "           --mode=<mode>  scan depth (default: collections, or cimisy.config's scan.mode):",
       "                            collections            repeating .map()'d arrays only",
       "                            collections-metadata   + page SEO metadata (export const metadata)",
       "                            static                 + static headings/paragraphs/images/links",
       "                            static-metadata        everything above",
-      "           --full         deprecated alias for --mode=static-metadata",
       "           --json         print the machine-readable report (project-relative paths) to stdout",
       "           --ci           exit 1 when any candidate or unanalyzable content is found, 2 on scan failure;",
       "                          prints a one-line summary to stderr (combine with --json for the full report)",
       "  import   Interactively select scanned candidates and import them into cimisy",
       "           --allow-dirty  skip the clean-git-working-tree check",
+      "  setup    Scaffold cimisy.config (if missing), the admin UI page, and the API route;",
+      "           never overwrites existing files — safe to re-run",
       "",
     ].join("\n"),
   );
@@ -282,6 +312,9 @@ async function main(): Promise<void> {
       return;
     case "import":
       await runImportCommand(projectRoot, rest);
+      return;
+    case "setup":
+      await runSetupCommand(projectRoot);
       return;
     case undefined:
     case "help":
