@@ -21,11 +21,11 @@ describe("resolveMode precedence", () => {
     expect(resolveMode([], {})).toBe("collections");
   });
 
-  it("--full maps to static-metadata with a deprecation notice, and conflicts with --mode", () => {
+  it("--full maps to static-metadata (no warning — it's the blessed step-1 shorthand), and conflicts with --mode", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(resolveMode(["--full"], {})).toBe("static-metadata");
-      expect(consoleError).toHaveBeenCalledOnce();
+      expect(consoleError).not.toHaveBeenCalled();
       expect(() => resolveMode(["--full", "--mode=static"], {})).toThrow(CliUsageError);
     } finally {
       consoleError.mockRestore();

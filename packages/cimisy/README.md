@@ -36,6 +36,8 @@ The local adapter needs no external setup and is the fastest way to see cimisy r
 npm install cimisy
 ```
 
+> **Shortcut:** `npx cimisy setup` scaffolds everything below automatically — the config file, the admin page, and the API route (skipping any that already exist). Migrating an existing site? Start with the full three-step flow instead: [Scanning & importing existing content](#scanning--importing-existing-content). The rest of this section shows the same files written by hand, so you know exactly what lands in your repo.
+
 Create `cimisy.config.ts` at your project root:
 
 ```ts
@@ -425,7 +427,15 @@ Full write-up, including the specific threat model and what's explicitly out of 
 
 ## Scanning & importing existing content
 
-`cimisy scan` statically analyzes a Next.js App Router codebase for hardcoded content that could move into cimisy, and `cimisy import` interactively applies the candidates you pick — writing content files, inserting config, and rewriting the source to read through the Reader. Import runs on a dedicated git branch and only supports `localSource` targets.
+Bringing an existing site under cimisy is a three-step flow:
+
+```sh
+npx cimisy scan --full   # 1. find hardcoded content across the whole site
+npx cimisy import        # 2. pick candidates and move them under cimisy's management
+npx cimisy setup         # 3. scaffold the admin UI page and API route
+```
+
+`cimisy scan` statically analyzes a Next.js App Router codebase for hardcoded content that could move into cimisy, and `cimisy import` interactively applies the candidates you pick — writing content files, inserting config (creating `cimisy.config.ts` if you don't have one yet), and rewriting the source to read through the Reader. Import runs on a dedicated git branch and only supports `localSource` targets. `cimisy setup` then scaffolds whatever the quickstart's manual steps would have had you write by hand — `cimisy.config.*` (when import hasn't already created it), the admin page at `app/(cimisy)/admin/[[...segments]]/page.tsx`, and the API route at `app/api/cimisy/[...route]/route.ts` — never overwriting anything that already exists, so it's safe to re-run. After step 3, start your dev server and open `/admin`.
 
 The scan analyzes every App Router entrypoint — `page.*`, `layout.*`, `template.*`, `not-found.*`, `loading.*`, `error.*`, `global-error.*` (including inside `@slot` parallel-route directories) — plus the components they transitively render. Content found only in layouts is proposed as a shared singleton spanning every route below it.
 
@@ -442,7 +452,7 @@ npx cimisy scan --mode=static-metadata
 | `static` | ✓ | ✓ | |
 | `static-metadata` | ✓ | ✓ | ✓ |
 
-Precedence: `--mode` flag > the config's `scan.mode` > `collections`. (`--full` still works as a deprecated alias for `--mode=static-metadata`.) Set defaults in `cimisy.config.ts` — both values must be plain literals, since the CLI reads the config statically without executing it:
+Precedence: `--mode` flag > the config's `scan.mode` > `collections`. (`--full` is shorthand for `--mode=static-metadata`.) Set defaults in `cimisy.config.ts` — both values must be plain literals, since the CLI reads the config statically without executing it:
 
 ```ts
 export default config({
