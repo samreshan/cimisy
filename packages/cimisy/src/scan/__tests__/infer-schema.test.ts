@@ -49,25 +49,23 @@ describe("inferSchema", () => {
     expect(title.optional).toBe(false);
   });
 
-  it("coerces numbers to text with a plain explanatory note", () => {
+  it("proposes a real number field for numeric values (no stringification note needed)", () => {
     const proposal = inferSchema([{ title: "A", priority: 1 }, { title: "B", priority: 2 }]);
     const priority = proposal.fields.find((f) => f.name === "priority")!;
-    expect(priority.proposedKind).toBe("text");
+    expect(priority.proposedKind).toBe("number");
     expect(priority.sourceKind).toBe("number");
-    expect(priority.note).toMatch(/numbers/);
+    expect(priority.note).toBeUndefined();
   });
 
-  it("coerces booleans to text with a distinct warning about truthy-check breakage — not the same note as numbers", () => {
+  it("proposes a real boolean field for boolean values — the old truthy-check warning is gone with fields.boolean()", () => {
     const proposal = inferSchema([
       { title: "A", featured: true },
       { title: "B", featured: false },
     ]);
     const featured = proposal.fields.find((f) => f.name === "featured")!;
-    expect(featured.proposedKind).toBe("text");
+    expect(featured.proposedKind).toBe("boolean");
     expect(featured.sourceKind).toBe("boolean");
-    // display-safety warning that numbers don't need: stringified "false" is truthy in JS
-    expect(featured.note).toMatch(/truthy/);
-    expect(featured.note).not.toMatch(/^values are booleans and will be stored as text$/);
+    expect(featured.note).toBeUndefined();
   });
 
   it("flags mixed-type values across items rather than guessing", () => {

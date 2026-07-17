@@ -15,6 +15,7 @@ export function TopNav({
   basePath,
   apiBasePath,
   draftsSupported,
+  scanSupported,
   contentKey,
 }: {
   user: MeResponse["user"];
@@ -22,6 +23,8 @@ export function TopNav({
   basePath: string;
   apiBasePath: string;
   draftsSupported: boolean;
+  /** Dev-only scan/import screen availability — see AdminManifest.scanSupported. */
+  scanSupported?: boolean;
   /** First URL segment under basePath, if any — used only to highlight the active tab. */
   contentKey?: string;
 }) {
@@ -32,14 +35,22 @@ export function TopNav({
       </a>
       <div className="cimisy-nav-links">
         <a
-          className={`cimisy-nav-link ${contentKey !== "team" && contentKey !== "drafts" ? "is-active" : ""}`}
+          className={`cimisy-nav-link ${contentKey !== "team" && contentKey !== "drafts" && contentKey !== "scan" && contentKey !== "media" ? "is-active" : ""}`}
           href={basePath}
         >
           Content
         </a>
+        <a className={`cimisy-nav-link ${contentKey === "media" ? "is-active" : ""}`} href={`${basePath}/media`}>
+          Media
+        </a>
         {draftsSupported && (
           <a className={`cimisy-nav-link ${contentKey === "drafts" ? "is-active" : ""}`} href={`${basePath}/drafts`}>
             Drafts
+          </a>
+        )}
+        {scanSupported && (
+          <a className={`cimisy-nav-link ${contentKey === "scan" ? "is-active" : ""}`} href={`${basePath}/scan`}>
+            Scan
           </a>
         )}
         {role === "admin" && (

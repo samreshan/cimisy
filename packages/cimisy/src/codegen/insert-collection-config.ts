@@ -27,6 +27,10 @@ function fieldFactoryCall(field: FieldProposal, collectionName: string): string 
       return `fields.image({ label: ${JSON.stringify(label)}, directory: ${JSON.stringify(`public/images/${collectionName}`)} })`;
     case "array-of-text":
       return `fields.array(fields.text({ label: ${JSON.stringify(label)} }))`;
+    case "boolean":
+      return `fields.boolean({ label: ${JSON.stringify(label)} })`;
+    case "number":
+      return `fields.number({ label: ${JSON.stringify(label)} })`;
   }
 }
 

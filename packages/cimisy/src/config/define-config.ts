@@ -170,7 +170,7 @@ const MAX_KEY_LENGTH = 100;
  * a collection or singleton with one of these keys would be unreachable
  * (or shadow a built-in screen), so fail loudly at config time.
  */
-const RESERVED_TOP_LEVEL_KEYS = new Set(["team", "drafts", "pages", "new"]);
+const RESERVED_TOP_LEVEL_KEYS = new Set(["team", "drafts", "pages", "new", "scan", "media"]);
 
 function assertValidKeySegment(segment: string, context: string): void {
   if (!KEY_SEGMENT_PATTERN.test(segment)) {

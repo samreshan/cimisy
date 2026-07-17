@@ -1,6 +1,6 @@
 import type { LiteralValue } from "./analyze-source.js";
 
-export type ProposedFieldKind = "text" | "image" | "array-of-text";
+export type ProposedFieldKind = "text" | "image" | "array-of-text" | "boolean" | "number";
 export type SourceValueKind = "string" | "number" | "boolean" | "array" | "null" | "mixed";
 
 export interface FieldProposal {
@@ -85,26 +85,18 @@ function inferField(name: string, values: LiteralValue[], presentOnEveryItem: bo
     return { name, sourceKind, optional, proposedKind: "text" };
   }
 
+  // Numbers and booleans map to their real field types (fields.number() /
+  // fields.boolean(), added in 2.4) — the value round-trips as its actual
+  // YAML type, so pre-existing truthy checks and arithmetic keep working.
+  // (Before fields.boolean() existed, booleans imported as literal
+  // "true"/"false" strings and needed a loud warning about inverted
+  // truthiness; that whole caveat is gone.)
   if (sourceKind === "number") {
-    return { name, sourceKind, optional, proposedKind: "text", note: "values are numbers and will be stored as text" };
+    return { name, sourceKind, optional, proposedKind: "number" };
   }
 
   if (sourceKind === "boolean") {
-    // Unlike a number, a boolean stringified as "true"/"false" is NOT display-safe: cimisy has no
-    // fields.boolean(), so the stored value becomes a string either way, and "false" is just as
-    // truthy as "true" in JS — any pre-existing `{field && <X/>}` check on the original boolean
-    // would render for BOTH values once migrated, silently inverting whatever `false` meant. This
-    // has to be called out distinctly from the number case, not folded into the same generic note.
-    return {
-      name,
-      sourceKind,
-      optional,
-      proposedKind: "text",
-      note:
-        'values are booleans and will be stored as literal text ("true"/"false") — cimisy has no boolean field type. ' +
-        "Any code doing a truthy check on this field (e.g. `{field && <X/>}`) must be updated to compare the string " +
-        'explicitly (e.g. `field === "true"`) after importing, or it will render for both values.',
-    };
+    return { name, sourceKind, optional, proposedKind: "boolean" };
   }
 
   if (sourceKind === "null") {

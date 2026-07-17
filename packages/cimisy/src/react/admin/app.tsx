@@ -7,7 +7,9 @@ import { type MeResponse, apiUrl, logout } from "./api.js";
 import { ContentTree, EntryList } from "./collections.js";
 import { DraftsPage } from "./drafts.js";
 import { EntryForm } from "./entry-form.js";
+import { MediaLibraryPage } from "./media.js";
 import { TopNav } from "./nav.js";
+import { ScanPage } from "./scan.js";
 import { SingletonForm } from "./singleton-form.js";
 import { TeamPage } from "./team.js";
 import { THEME_BOOTSTRAP_SCRIPT } from "./theme.js";
@@ -21,20 +23,29 @@ export interface AdminAppProps {
 
 export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminAppProps) {
   const [me, setMe] = useState<MeResponse | null>(null);
-  const [meError, setMeError] = useState(false);
+  const [meError, setMeError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setMeError(false);
+    setMeError(null);
     setMe(null);
     fetch(apiUrl(apiBasePath, "/auth/me"))
-      .then((res) => res.json())
-      .then((data: MeResponse) => {
-        if (!cancelled) setMe(data);
+      .then(async (res) => {
+        // A failing /auth/me must never fall through to the sign-in gate
+        // (an unparseable/500 body has no `authenticated` field and would
+        // read as "signed out") — surface the server's own message when it
+        // sent one, e.g. a config error like a missing GitHub env var.
+        const data = (await res.json().catch(() => null)) as (MeResponse & { error?: string }) | null;
+        if (cancelled) return;
+        if (!res.ok || data === null) {
+          setMeError(data?.error ?? "Couldn't reach the admin API.");
+          return;
+        }
+        setMe(data);
       })
       .catch(() => {
-        if (!cancelled) setMeError(true);
+        if (!cancelled) setMeError("Couldn't reach the admin API.");
       });
     return () => {
       cancelled = true;
@@ -58,7 +69,9 @@ export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminApp
       {meError ? (
         <div className="cimisy-signin">
           <h1 className="cimisy-heading">cimisy admin</h1>
-          <p className="cimisy-banner cimisy-banner-danger">Couldn&apos;t reach the admin API.</p>
+          <p className="cimisy-banner cimisy-banner-danger" role="alert">
+            {meError}
+          </p>
           <button
             type="button"
             className="cimisy-btn cimisy-btn-secondary"
@@ -68,7 +81,11 @@ export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminApp
           </button>
         </div>
       ) : me === null ? (
-        <p className="cimisy-muted">Loading…</p>
+        <div className="cimisy-skeleton-stack" role="status" aria-label="Loading admin">
+          <div className="cimisy-skeleton cimisy-skeleton-line" style={{ width: 160 }} />
+          <div className="cimisy-skeleton cimisy-skeleton-card" />
+          <div className="cimisy-skeleton cimisy-skeleton-card" />
+        </div>
       ) : !me.authenticated ? (
         <SignInGate apiBasePath={apiBasePath} />
       ) : me.pending ? (
@@ -81,6 +98,7 @@ export function AdminApp({ manifest, segments, basePath, apiBasePath }: AdminApp
             basePath={basePath}
             apiBasePath={apiBasePath}
             draftsSupported={manifest.draftsSupported}
+            scanSupported={manifest.scanSupported}
             contentKey={segments[0]}
           />
           <AdminRoutes
@@ -140,7 +158,7 @@ function AdminRoutes({
   const [contentKey, slug] = segments;
 
   if (!contentKey) {
-    return <ContentTree manifest={manifest} basePath={basePath} />;
+    return <ContentTree manifest={manifest} basePath={basePath} apiBasePath={apiBasePath} />;
   }
   // Reserved before content-key routing, the same way "new" is reserved at
   // the slug level below — config() rejects content keys named "team",
@@ -150,6 +168,15 @@ function AdminRoutes({
   }
   if (contentKey === "drafts") {
     return <DraftsPage manifest={manifest} basePath={basePath} apiBasePath={apiBasePath} />;
+  }
+  // Only routed where the server said the surface exists (local adapter, not
+  // production) — everywhere else "scan" falls through to the unknown-content
+  // message, exactly as if the screen didn't exist.
+  if (contentKey === "scan" && manifest.scanSupported) {
+    return <ScanPage basePath={basePath} apiBasePath={apiBasePath} />;
+  }
+  if (contentKey === "media") {
+    return <MediaLibraryPage manifest={manifest} basePath={basePath} apiBasePath={apiBasePath} />;
   }
   const entity = manifest.byKey[contentKey];
   if (!entity) {

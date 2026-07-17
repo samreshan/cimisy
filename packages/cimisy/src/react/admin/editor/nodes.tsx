@@ -49,19 +49,16 @@ export const CimisyParagraph = Node.create({
 });
 
 /**
- * Replaces StarterKit's built-in heading. Deliberately `content: "text*"`
- * with no marks allowed — cimisy's heading block schema is still plain
- * `{level, text: string}` (see mdx/block-registry.ts; unlike paragraph and
- * callout, headings were never richified), so offering a bold/italic/link
- * affordance inside a heading would silently vanish on save. Not
- * supporting it here is more honest than supporting it in the editor and
- * dropping it on write.
+ * Replaces StarterKit's built-in heading. `content: "inline*"` with marks
+ * allowed — cimisy's heading block schema carries the same rich
+ * `content: InlineNode[]` as paragraphs (richified in 2.4; see
+ * mdx/block-registry.ts), so bold/italic/link inside a heading round-trips
+ * instead of silently vanishing on save.
  */
 export const CimisyHeading = Node.create({
   name: "heading",
   group: "block",
-  content: "text*",
-  marks: "",
+  content: "inline*",
   defining: true,
   addOptions() {
     return { levels: [1, 2, 3, 4, 5, 6] as number[] };
@@ -178,15 +175,35 @@ export const CimisyImage = Node.create<ImageBlockOptions>({
   },
 });
 
-function CalloutNodeView({ node, extension }: { node: { attrs: Record<string, unknown> }; extension: { options: CalloutBlockOptions } }) {
+function CalloutNodeView({
+  node,
+  updateAttributes,
+  extension,
+}: {
+  node: { attrs: Record<string, unknown> };
+  updateAttributes: (attrs: Record<string, unknown>) => void;
+  extension: { options: CalloutBlockOptions };
+}) {
   const tone = typeof node.attrs.tone === "string" ? node.attrs.tone : "info";
   const blockType = typeof node.attrs.blockType === "string" ? node.attrs.blockType : "callout";
   const tones = extension.options.tonesByBlockType[blockType] ?? [tone];
   return (
     <NodeViewWrapper className={`cimisy-block-list cimisy-editor-callout cimisy-editor-callout-${tone}`} data-drag-handle>
-      <div className="cimisy-block-header">
+      {/* The whole header is contentEditable={false}, not just the select:
+          form controls nested directly inside a contentEditable region are
+          unreliable for pointer interaction in some browsers — carving the
+          header out of the editable region entirely is what makes the live
+          tone select dependable (the same technique the image/custom-block
+          NodeViews rely on by being atoms). */}
+      <div className="cimisy-block-header" contentEditable={false}>
         <span>Callout</span>
-        <select className="cimisy-select" style={{ width: "auto" }} value={tone} disabled contentEditable={false}>
+        <select
+          className="cimisy-select"
+          style={{ width: "auto" }}
+          value={tone}
+          aria-label="Callout tone"
+          onChange={(e) => updateAttributes({ tone: e.target.value })}
+        >
           {tones.map((t) => (
             <option key={t} value={t}>
               {t}
@@ -203,16 +220,6 @@ interface CalloutBlockOptions {
   tonesByBlockType: Record<string, string[]>;
 }
 
-/**
- * The tone `<select>` inside the NodeView is intentionally read-only
- * (`disabled`) rather than wired to `updateAttributes` — selects nested
- * inside a contentEditable ProseMirror region are unreliable for pointer
- * interaction in some browsers, and callout content is short-lived enough
- * (added, tone set, rarely revisited) that the plain-props-form fallback
- * (double-click via the block-props editor, same as the pre-Tiptap
- * fallback UI) is an acceptable v1 answer for changing an existing
- * callout's tone. This is a deliberate scope trim, not an oversight.
- */
 export const CimisyCallout = Node.create<CalloutBlockOptions>({
   name: "cimisyCallout",
   group: "block",

@@ -9,8 +9,11 @@ import {
   FieldsEditor,
   mapIssuesToFieldErrors,
   requiredFieldErrors,
+  RestoreDraftPrompt,
 } from "./entry-form.js";
 import { HistoryPanel } from "./history.js";
+import { draftStorageKey, useLocalDraft } from "./use-local-draft.js";
+import { useSaveShortcut } from "./use-save-shortcut.js";
 import { useUnsavedChangesGuard } from "./use-unsaved-guard.js";
 
 /** The reserved slug singleton drafts/uploads use — mirror of shared/branch-name.ts's SINGLETON_DRAFT_SLUG (not imported: that module is server-side). */
@@ -49,6 +52,13 @@ export function SingletonForm({
 
   useUnsavedChangesGuard(dirty);
 
+  const { pendingDraft, restoreDraft, discardDraft, clearDraft } = useLocalDraft({
+    storageKey: draftStorageKey(singleton.key, SINGLETON_SLUG),
+    ready: !loading && !loadError,
+    values,
+    dirty,
+  });
+
   useEffect(() => {
     let cancelled = false;
     fetch(apiUrl(apiBasePath, `/singletons/${singleton.key}`))
@@ -82,8 +92,7 @@ export function SingletonForm({
     };
   }, [singleton.key, apiBasePath]);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function submit() {
     setError(null);
     setFieldErrors({});
     const preSubmitErrors = requiredFieldErrors(singleton.fields, values);
@@ -114,10 +123,29 @@ export function SingletonForm({
     if (data.publish?.status === "draft") setDraftRef(data.publish.branch);
     setNeverSaved(false);
     setDirty(false);
+    clearDraft();
     setPreviewKey((k) => k + 1);
   }
 
-  if (loading) return <p className="cimisy-muted">Loading…</p>;
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    void submit();
+  }
+
+  useSaveShortcut(() => {
+    if (!loading && !loadError && !pendingDraft) void submit();
+  });
+
+  if (loading) {
+    return (
+      <div className="cimisy-skeleton-stack" role="status" aria-label="Loading singleton">
+        <div className="cimisy-skeleton cimisy-skeleton-line" style={{ width: 220 }} />
+        <div className="cimisy-skeleton cimisy-skeleton-input" />
+        <div className="cimisy-skeleton cimisy-skeleton-input" />
+        <div className="cimisy-skeleton cimisy-skeleton-input" style={{ height: 180 }} />
+      </div>
+    );
+  }
 
   // A dead end, not a fillable form: `values`/`version` never got populated, so rendering the
   // form here would let a Save silently overwrite the real file's fields with blanks.
@@ -130,13 +158,34 @@ export function SingletonForm({
     );
   }
 
+  // Gate, not banner — see use-local-draft.ts's doc comment (the Tiptap
+  // editor must mount with the chosen values, it can't resync afterward).
+  if (pendingDraft) {
+    return (
+      <div>
+        <Breadcrumb basePath={basePath} trail={[{ label: singleton.label }]} />
+        <RestoreDraftPrompt
+          savedAt={pendingDraft.savedAt}
+          onRestore={() => {
+            const restored = restoreDraft();
+            if (restored) {
+              setValues(restored);
+              setDirty(true);
+            }
+          }}
+          onDiscard={discardDraft}
+        />
+      </div>
+    );
+  }
+
   const canPreview = Boolean(singleton.previewPath);
 
   return (
     <div className="cimisy-entry-layout">
       <div className="cimisy-entry-main">
         <form onSubmit={handleSubmit}>
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <div className="cimisy-form-header">
             <Breadcrumb basePath={basePath} trail={[{ label: singleton.label }]} />
             {canPreview && (
               <button
@@ -149,7 +198,11 @@ export function SingletonForm({
             )}
           </div>
           {neverSaved && <p className="cimisy-muted">Not created yet — fill in the fields and save.</p>}
-          {error && <p className="cimisy-banner cimisy-banner-danger">{error}</p>}
+          {error && (
+            <p className="cimisy-banner cimisy-banner-danger" role="alert">
+              {error}
+            </p>
+          )}
           <FieldsEditor
             fields={singleton.fields}
             values={values}
@@ -172,7 +225,12 @@ export function SingletonForm({
           <div className="cimisy-action-bar">
             <div className="cimisy-action-bar-status">
               {publishResult?.status === "draft" && publishResult.branch && (
-                <span className="cimisy-chip-branch">{publishResult.branch}</span>
+                <span
+                  className="cimisy-chip-branch"
+                  title="Your changes are saved on this git branch — they go live when the pull request is approved and merged."
+                >
+                  {publishResult.branch}
+                </span>
               )}
               {publishResult?.status === "draft" && publishResult.pullRequestUrl && (
                 <a
@@ -202,10 +260,10 @@ export function SingletonForm({
       {canPreview && previewOpen && singleton.previewPath && (
         <div className="cimisy-entry-preview">
           <div className="cimisy-preview-header">
-            <span className="cimisy-preview-eyebrow">Draft mode preview</span>
-            <span className="cimisy-badge">
+            <span className="cimisy-preview-eyebrow">Preview · last saved version</span>
+            <span className="cimisy-badge" title="The preview reloads on every save — it never shows unsaved edits.">
               <span className={`cimisy-badge-dot cimisy-badge-dot-${dirty ? "warning" : "accent"}`} />
-              {dirty ? "unsaved changes" : "draft"}
+              {dirty ? "save to update" : "up to date"}
             </span>
           </div>
           <iframe

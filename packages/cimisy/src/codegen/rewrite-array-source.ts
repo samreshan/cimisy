@@ -50,6 +50,10 @@ function tsTypeForField(kind: ProposedFieldKind): string {
       return "string[]";
     case "image":
       return "string | null";
+    case "boolean":
+      return "boolean";
+    case "number":
+      return "number | null";
   }
 }
 

@@ -122,7 +122,7 @@ export function tiptapInlineToNodes(content: TiptapNode[] | undefined): InlineNo
   return out;
 }
 
-/** Flattens Tiptap inline content to plain text, discarding marks — used for heading (which the schema still models as `{level, text: string}`, never richified; see mdx/block-registry.ts). */
+/** Flattens Tiptap inline content to plain text, discarding marks. No built-in block needs this since headings were richified (2.4), but it stays exported for custom callers/tests. */
 export function tiptapInlineToPlainText(content: TiptapNode[] | undefined): string {
   if (!content) return "";
   return content
@@ -149,12 +149,15 @@ function blockToTiptapNode(block: BlockNode, manifestByName: Map<string, BlockTy
   }
   if (kind === "heading") {
     const level = typeof block.props.level === "number" ? block.props.level : 2;
-    const text = typeof block.props.text === "string" ? block.props.text : "";
-    return {
-      type: "heading",
-      attrs: { ...base, level },
-      content: text.length ? [{ type: "text", text }] : [],
-    };
+    // Legacy 2.3 in-flight shape ({level, text}) still loads: the registry's
+    // upgradeLegacyText shim normalizes on save, but the editor shouldn't
+    // show an empty heading in the meantime.
+    const content = Array.isArray(block.props.content)
+      ? inlineNodesToTiptap(safeInlineArray(block.props.content))
+      : typeof block.props.text === "string" && block.props.text.length > 0
+        ? [{ type: "text", text: block.props.text }]
+        : [];
+    return { type: "heading", attrs: { ...base, level }, content };
   }
   if (kind === "code") {
     const code = typeof block.props.code === "string" ? block.props.code : "";
@@ -197,7 +200,7 @@ function tiptapNodeToBlock(node: TiptapNode): BlockNode | null {
   }
   if (node.type === "heading") {
     const level = typeof node.attrs?.level === "number" ? node.attrs.level : 2;
-    return { type: blockType, id: blockId, props: { level, text: tiptapInlineToPlainText(node.content) } };
+    return { type: blockType, id: blockId, props: { level, content: tiptapInlineToNodes(node.content) } };
   }
   if (node.type === "cimisyCodeBlock") {
     const language = typeof node.attrs?.language === "string" ? node.attrs.language : undefined;

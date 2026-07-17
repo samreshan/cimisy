@@ -117,19 +117,21 @@ interface OutlineItem {
 }
 
 /**
- * Block reordering/removal, deliberately implemented as a plain list with
- * move-up/move-down/remove buttons rather than in-editor pointer-drag
- * handles: dragging inside a live ProseMirror document needs careful
- * position-mapping/decoration work that's genuinely hard to get right
- * without interactive browser iteration, and a wrong implementation there
+ * Block reordering/removal: a plain outline list with drag-and-drop rows
+ * plus move-up/move-down buttons (kept as the keyboard-accessible path —
+ * HTML5 DnD is pointer-only). Dragging happens on this list, deliberately
+ * NOT inside the live ProseMirror document: in-document pointer-drag needs
+ * careful position-mapping/decoration work where a wrong implementation
  * (dropped keystrokes, corrupted selections) is a much worse failure mode
- * than "reordering isn't drag-and-drop yet." Every operation here works
- * by reading/rewriting the whole top-level content array via
+ * than an outline drag. Every operation — drop included — works by
+ * reading/rewriting the whole top-level content array via
  * getJSON()/setContent(), the same safe, easy-to-verify approach
  * blocks-fallback.tsx's pre-Tiptap editor used for its up/down buttons.
  */
 function BlockOutline({ editor, manifestByName }: { editor: Editor; manifestByName: Map<string, BlockTypeManifest> }) {
   const [items, setItems] = useState<OutlineItem[]>([]);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
 
   useEffect(() => {
     function sync() {
@@ -172,17 +174,67 @@ function BlockOutline({ editor, manifestByName }: { editor: Editor; manifestByNa
     withContent((content) => content.filter((_, i) => i !== index));
   }
 
+  /** Moves the dragged block so it lands at the drop row's position — a splice, not a swap, matching what dragging a row between others visually promises. */
+  function drop(from: number, to: number) {
+    if (from === to) return;
+    withContent((content) => {
+      const [moved] = content.splice(from, 1);
+      if (!moved) return content;
+      content.splice(to, 0, moved);
+      return content;
+    });
+  }
+
   if (items.length <= 1) return null;
 
   return (
-    <div className="cimisy-block-list" style={{ marginTop: 12 }}>
+    <div className="cimisy-block-list" style={{ marginTop: 12 }} role="list" aria-label="Block order">
       {items.map((item, index) => (
-        <div key={item.id || index} className="cimisy-block-outline-item">
-          <span className="cimisy-muted" style={{ fontSize: "0.85em" }}>
-            {item.label}
+        <div
+          key={item.id || index}
+          role="listitem"
+          className={`cimisy-block-outline-item${dropIndex === index && dragIndex !== null && dragIndex !== index ? " is-drop-target" : ""}${dragIndex === index ? " is-dragging" : ""}`}
+          draggable
+          onDragStart={(e) => {
+            setDragIndex(index);
+            e.dataTransfer.effectAllowed = "move";
+            // Firefox requires data for a drag to start at all.
+            e.dataTransfer.setData("text/plain", String(index));
+          }}
+          onDragOver={(e) => {
+            if (dragIndex === null) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            setDropIndex(index);
+          }}
+          onDragLeave={() => setDropIndex((current) => (current === index ? null : current))}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (dragIndex !== null) drop(dragIndex, index);
+            setDragIndex(null);
+            setDropIndex(null);
+          }}
+          onDragEnd={() => {
+            setDragIndex(null);
+            setDropIndex(null);
+          }}
+        >
+          <span className="cimisy-block-outline-label">
+            <span className="cimisy-drag-handle" aria-hidden="true">
+              ⠿
+            </span>
+            <span className="cimisy-muted" style={{ fontSize: "0.85em" }}>
+              {item.label}
+            </span>
           </span>
           <span className="cimisy-block-controls">
-            <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={() => move(index, -1)} disabled={index === 0}>
+            <button
+              type="button"
+              className="cimisy-btn cimisy-btn-ghost"
+              onClick={() => move(index, -1)}
+              disabled={index === 0}
+              aria-label={`Move ${item.label} up`}
+            >
               &uarr;
             </button>
             <button
@@ -190,10 +242,16 @@ function BlockOutline({ editor, manifestByName }: { editor: Editor; manifestByNa
               className="cimisy-btn cimisy-btn-ghost"
               onClick={() => move(index, 1)}
               disabled={index === items.length - 1}
+              aria-label={`Move ${item.label} down`}
             >
               &darr;
             </button>
-            <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={() => remove(index)}>
+            <button
+              type="button"
+              className="cimisy-btn cimisy-btn-ghost"
+              onClick={() => remove(index)}
+              aria-label={`Remove ${item.label}`}
+            >
               Remove
             </button>
           </span>

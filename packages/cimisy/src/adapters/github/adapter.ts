@@ -49,6 +49,30 @@ export class GithubStorageAdapter implements StorageAdapter {
   readonly credentials: GithubAppCredentials;
 
   constructor(options: GithubSourceOptions) {
+    // Fail at config load with the exact missing name(s) — without this, an
+    // unset env var sails through as `undefined` and only surfaces much
+    // later as an opaque 500 from the GitHub client mid-request.
+    if (!options.repo) {
+      throw new CimisyError(
+        'githubSource is missing "repo" — usually wired from the CIMISY_GITHUB_REPO env var (e.g. in .env.local). Expected "owner/repo".',
+        "MISSING_GITHUB_CONFIG",
+      );
+    }
+    const credentialEnvVars = {
+      appId: "CIMISY_GITHUB_APP_ID",
+      privateKey: "CIMISY_GITHUB_APP_PRIVATE_KEY",
+      clientId: "CIMISY_GITHUB_APP_CLIENT_ID",
+      clientSecret: "CIMISY_GITHUB_APP_CLIENT_SECRET",
+    } as const;
+    const missing = (Object.keys(credentialEnvVars) as Array<keyof typeof credentialEnvVars>).filter((key) => !options[key]);
+    if (missing.length > 0) {
+      throw new CimisyError(
+        `githubSource is missing credentials: ${missing.join(", ")}. ` +
+          `If you wire these from env vars, make sure ${missing.map((k) => credentialEnvVars[k]).join(", ")} ` +
+          `${missing.length === 1 ? "is" : "are"} set (e.g. in .env.local) — see the README's GitHub App setup walkthrough.`,
+        "MISSING_GITHUB_CONFIG",
+      );
+    }
     if (!options.sessionSecret || options.sessionSecret.length < 32) {
       throw new CimisyError(
         "sessionSecret must be at least 32 characters — it signs the session cookie, and a short secret is brute-forceable. " +

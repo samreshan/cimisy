@@ -9,6 +9,8 @@ import { TiptapBlockEditor } from "./editor/block-editor.js";
 import { HistoryPanel } from "./history.js";
 import { ImageField } from "./image-field.js";
 import { SeoPanel } from "./seo-panel.js";
+import { draftStorageKey, useLocalDraft } from "./use-local-draft.js";
+import { useSaveShortcut } from "./use-save-shortcut.js";
 import { useUnsavedChangesGuard } from "./use-unsaved-guard.js";
 
 /** A `cimisy / {segment} / .../ {here}` header — the reference layout's stand-in for a page
@@ -29,6 +31,34 @@ export function Breadcrumb({ basePath, trail }: { basePath: string; trail: { lab
         </Fragment>
       ))}
     </nav>
+  );
+}
+
+/** The autosaved-draft recovery prompt (see use-local-draft.ts) — shared by EntryForm and SingletonForm, rendered in place of the form until the user chooses. */
+export function RestoreDraftPrompt({
+  savedAt,
+  onRestore,
+  onDiscard,
+}: {
+  savedAt: string;
+  onRestore: () => void;
+  onDiscard: () => void;
+}) {
+  return (
+    <div className="cimisy-empty-state" role="alertdialog" aria-label="Restore unsaved draft">
+      <p className="cimisy-empty-state-title">Restore unsaved draft?</p>
+      <p className="cimisy-muted" style={{ margin: 0 }}>
+        This entry has unsaved edits from {new Date(savedAt).toLocaleString()} that were never saved to the server.
+      </p>
+      <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+        <button type="button" className="cimisy-btn cimisy-btn-primary" onClick={onRestore}>
+          Restore draft
+        </button>
+        <button type="button" className="cimisy-btn cimisy-btn-secondary" onClick={onDiscard}>
+          Discard it
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -123,13 +153,17 @@ export function mapIssuesToFieldErrors(
   return { fieldErrors, unmapped };
 }
 
-/** Pre-submit required check mirroring the server's `.min(1, "Required.")` — catches empty required text fields without a round-trip. */
+/** Pre-submit required check mirroring the server's validation — catches empty required fields without a round-trip. */
 export function requiredFieldErrors(fields: FieldManifest[], values: Record<string, unknown>): Record<string, string> {
   const errors: Record<string, string> = {};
   for (const field of fields) {
     if (!field.required) continue;
     const value = values[field.name];
-    if (typeof value !== "string" || value.length === 0) errors[field.name] = "Required.";
+    if (field.kind === "number") {
+      if (typeof value !== "number" || Number.isNaN(value)) errors[field.name] = "Required.";
+    } else if (typeof value !== "string" || value.length === 0) {
+      errors[field.name] = "Required.";
+    }
   }
   return errors;
 }
@@ -177,6 +211,13 @@ export function EntryForm({
 
   useUnsavedChangesGuard(dirty);
 
+  const { pendingDraft, restoreDraft, discardDraft, clearDraft } = useLocalDraft({
+    storageKey: draftStorageKey(collection.key, slug),
+    ready: !loading && !loadError,
+    values,
+    dirty,
+  });
+
   useEffect(() => {
     if (!slug) return;
     let cancelled = false;
@@ -204,8 +245,7 @@ export function EntryForm({
     };
   }, [collection.key, slug, apiBasePath]);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function submit() {
     setError(null);
     setFieldErrors({});
     const preSubmitErrors = requiredFieldErrors(collection.fields, values);
@@ -241,10 +281,20 @@ export function EntryForm({
     setPublishResult(data.publish ?? null);
     if (data.publish?.status === "draft") setDraftRef(data.publish.branch);
     setDirty(false);
+    clearDraft();
     setPreviewKey((k) => k + 1);
     router.push(`${basePath}/${collection.key}/${data.slug}`);
     router.refresh();
   }
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    void submit();
+  }
+
+  useSaveShortcut(() => {
+    if (!loading && !loadError && !pendingDraft && !deleting) void submit();
+  });
 
   async function handleDelete() {
     if (!slug) return;
@@ -272,11 +322,22 @@ export function EntryForm({
       return;
     }
     setDirty(false);
+    clearDraft();
     router.push(`${basePath}/${collection.key}`);
     router.refresh();
   }
 
-  if (loading) return <p className="cimisy-muted">Loading…</p>;
+  if (loading) {
+    return (
+      <div className="cimisy-skeleton-stack" role="status" aria-label="Loading entry">
+        <div className="cimisy-skeleton cimisy-skeleton-line" style={{ width: 220 }} />
+        <div className="cimisy-skeleton cimisy-skeleton-title" />
+        <div className="cimisy-skeleton cimisy-skeleton-input" />
+        <div className="cimisy-skeleton cimisy-skeleton-input" />
+        <div className="cimisy-skeleton cimisy-skeleton-input" style={{ height: 180 }} />
+      </div>
+    );
+  }
 
   // A dead end, not a fillable form: `values`/`version` never got populated, so rendering the
   // form here would let a Save silently overwrite the real file's fields with blanks.
@@ -292,6 +353,31 @@ export function EntryForm({
     );
   }
 
+  // Gate, not banner: the form (and its mount-once Tiptap editor) must not
+  // render until the user picks which values it should mount with — see
+  // use-local-draft.ts's doc comment.
+  if (pendingDraft) {
+    return (
+      <div>
+        <Breadcrumb
+          basePath={basePath}
+          trail={[{ label: collection.label, href: `${basePath}/${collection.key}` }, { label: slug ?? "New entry" }]}
+        />
+        <RestoreDraftPrompt
+          savedAt={pendingDraft.savedAt}
+          onRestore={() => {
+            const restored = restoreDraft();
+            if (restored) {
+              setValues(restored);
+              setDirty(true);
+            }
+          }}
+          onDiscard={discardDraft}
+        />
+      </div>
+    );
+  }
+
   const canPreview = Boolean(slug && collection.previewPath);
   // Best-effort guess at "the title": the first plain-text field. `collection.slugField` looks
   // tempting but names the field the *URL* is derived from, which is often a separate, auto-
@@ -302,7 +388,7 @@ export function EntryForm({
     <div className="cimisy-entry-layout">
       <div className="cimisy-entry-main">
         <form onSubmit={handleSubmit}>
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <div className="cimisy-form-header">
             <Breadcrumb
               basePath={basePath}
               trail={[
@@ -353,7 +439,12 @@ export function EntryForm({
           <div className="cimisy-action-bar">
             <div className="cimisy-action-bar-status">
               {publishResult?.status === "draft" && publishResult.branch && (
-                <span className="cimisy-chip-branch">{publishResult.branch}</span>
+                <span
+                  className="cimisy-chip-branch"
+                  title="Your changes are saved on this git branch — they go live when the pull request is approved and merged."
+                >
+                  {publishResult.branch}
+                </span>
               )}
               {publishResult?.status === "draft" && publishResult.pullRequestUrl && (
                 <a
@@ -381,7 +472,7 @@ export function EntryForm({
                 </span>
               )}
             </div>
-            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span className="cimisy-form-actions">
               {slug &&
                 (confirmingDelete ? (
                   <>
@@ -424,10 +515,10 @@ export function EntryForm({
       {canPreview && previewOpen && slug && collection.previewPath && (
         <div className="cimisy-entry-preview">
           <div className="cimisy-preview-header">
-            <span className="cimisy-preview-eyebrow">Draft mode preview</span>
-            <span className="cimisy-badge">
+            <span className="cimisy-preview-eyebrow">Preview · last saved version</span>
+            <span className="cimisy-badge" title="The preview reloads on every save — it never shows unsaved edits.">
               <span className={`cimisy-badge-dot cimisy-badge-dot-${dirty ? "warning" : "accent"}`} />
-              {dirty ? "unsaved changes" : "draft"}
+              {dirty ? "save to update" : "up to date"}
             </span>
           </div>
           <iframe
@@ -507,6 +598,114 @@ function FieldInput({
         slug={slug}
         draftRef={draftRef}
       />
+    );
+  }
+  if (field.kind === "boolean") {
+    return (
+      <div className="cimisy-field">
+        <label className="cimisy-label cimisy-toggle-label" htmlFor={field.name}>
+          <input
+            id={field.name}
+            type="checkbox"
+            checked={value === true}
+            onChange={(e) => onChange(e.target.checked)}
+          />
+          {field.label}
+        </label>
+      </div>
+    );
+  }
+  if (field.kind === "number") {
+    return (
+      <div className="cimisy-field">
+        <label className="cimisy-label" htmlFor={field.name}>
+          {field.label}
+          {field.required && (
+            <span className="cimisy-required-marker" aria-hidden="true">
+              *
+            </span>
+          )}
+        </label>
+        <input
+          id={field.name}
+          className="cimisy-input"
+          type="number"
+          value={typeof value === "number" ? value : ""}
+          min={field.min}
+          max={field.max}
+          onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+          aria-required={field.required || undefined}
+          aria-invalid={error ? true : undefined}
+        />
+        {error && (
+          <p className="cimisy-field-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
+  if (field.kind === "select") {
+    return (
+      <div className="cimisy-field">
+        <label className="cimisy-label" htmlFor={field.name}>
+          {field.label}
+          {field.required && (
+            <span className="cimisy-required-marker" aria-hidden="true">
+              *
+            </span>
+          )}
+        </label>
+        <select
+          id={field.name}
+          className="cimisy-select"
+          value={typeof value === "string" ? value : ""}
+          onChange={(e) => onChange(e.target.value)}
+          aria-required={field.required || undefined}
+          aria-invalid={error ? true : undefined}
+        >
+          {!field.required && <option value="">—</option>}
+          {(field.options ?? []).map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        {error && (
+          <p className="cimisy-field-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
+  if (field.kind === "text" && field.multiline && !isTitle) {
+    return (
+      <div className="cimisy-field">
+        <label className="cimisy-label" htmlFor={field.name}>
+          {field.label}
+          {field.required && (
+            <span className="cimisy-required-marker" aria-hidden="true">
+              *
+            </span>
+          )}
+        </label>
+        <textarea
+          id={field.name}
+          className="cimisy-textarea"
+          rows={4}
+          value={typeof value === "string" ? value : ""}
+          onChange={(e) => onChange(e.target.value)}
+          maxLength={field.maxLength}
+          aria-required={field.required || undefined}
+          aria-invalid={error ? true : undefined}
+        />
+        {error && (
+          <p className="cimisy-field-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
     );
   }
   if (field.kind === "date") {

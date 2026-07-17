@@ -134,9 +134,25 @@ describe("blocksToTiptapDoc / tiptapDocToBlocks: built-in block kinds", () => {
     expect(roundTrip(blocks)).toEqual(blocks);
   });
 
-  it("heading round-trips level and plain text", () => {
-    const blocks: BlockNode[] = [{ type: "heading", id: "h1", props: { level: 3, text: "Section" } }];
+  it("heading round-trips level and rich content", () => {
+    const blocks: BlockNode[] = [
+      {
+        type: "heading",
+        id: "h1",
+        props: {
+          level: 3,
+          content: [{ type: "text", text: "Section " }, { type: "strong", children: [{ type: "text", text: "title" }] }],
+        },
+      },
+    ];
     expect(roundTrip(blocks)).toEqual(blocks);
+  });
+
+  it("heading in the legacy 2.3 { level, text } shape loads into the editor and saves as { level, content }", () => {
+    const blocks: BlockNode[] = [{ type: "heading", id: "h1", props: { level: 3, text: "Legacy" } }];
+    expect(roundTrip(blocks)).toEqual([
+      { type: "heading", id: "h1", props: { level: 3, content: [{ type: "text", text: "Legacy" }] } },
+    ]);
   });
 
   it("code round-trips code and language", () => {
