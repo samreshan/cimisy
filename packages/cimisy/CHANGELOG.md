@@ -1,5 +1,36 @@
 # cimisy
 
+## 2.3.0
+
+### Minor Changes
+
+- 4e8d421: Whole-site static scan (modes, metadata import, CI gate) plus four data-loss-grade admin fixes.
+
+  **`cimisy scan` covers the whole site, in four selectable depths.**
+
+  - **Every App Router entrypoint is scanned** — not just `page.*` files: `layout.*`, `template.*`, `not-found.*`, `loading.*`, `error.*`, and `global-error.*` (plus pages inside `@slot` parallel-route directories; `(.)`-style intercepting-route dirs are skipped). A layout's content spans every page route in its subtree, and regions found _only_ via layout/template files are always proposed as shared top-level singletons — even on a single route, nesting them under that page would orphan them the moment a second page appears. Route derivation now strips `@slot` segments like route groups.
+  - **Four scan modes replace the boolean `--full`**: `collections` (default), `collections-metadata`, `static`, `static-metadata`. Select with `--mode=<mode>`, or set a default in `cimisy.config.ts` via the new `scan: { mode, exclude }` key (read statically — literals only, the CLI never executes your config; `exclude` skips appDir-relative path prefixes at discovery). Precedence: `--mode` > config > default. `--full` still works as a deprecated alias for `--mode=static-metadata` and prints a notice.
+  - **Page metadata is now importable, not report-only.** `cimisy import` offers `export const metadata = { title, description, openGraph: { url } }` candidates: it inserts a `seo: section({ schema: { seo: fields.seo() } })` under the page's config entry (sharing one `page()` with any static sections imported for the same route), writes the values as YAML through the same validated write path the admin uses, and replaces the statement with a `generateMetadata()` reading it back via `createMetadata()`. Offsets are re-derived at apply time, so it coexists with other candidates edited into the same file in one run.
+  - **The metadata analyzer is hardened for deletion-safety**: metadata with properties `fields.seo()` can't store (`keywords`, `robots`, `openGraph.images`, …), divergent `openGraph.title`/`description`, non-object-literal initializers, and existing `generateMetadata()` exports are all reported as not import-eligible instead of silently tolerated; `satisfies Metadata` wrappers are unwrapped.
+  - **CI mode**: `cimisy scan --ci` exits 0 only when nothing was found (unanalyzable detections count — they're still hardcoded content), 1 on findings, 2 on scan failure, with a one-line summary on stderr. `--json` prints the full report to stdout with project-root-relative paths (the on-disk `.cimisy/scan-report.json` cache keeps absolute paths so `cimisy import` keeps working). Reports now carry `mode` and `reportVersion`.
+  - Fixed a latent type error in the static-content codemod: generated `cimisyReader.pages.<key>.<section>.get()` didn't typecheck in strict TS projects (`PageReader` values are `CollectionReader | SingletonReader`); TS rewrites now emit a `SingletonReader` assertion.
+
+  **Admin fixes (all four are data-loss-grade):**
+
+  - **Saves are validated before they're written.** Previously the write path ran no field validation at all — a save violating `isRequired`/`maxLength` succeeded and produced an entry that could never be loaded again. Field zod schemas now gate `writeEntry`/`writeSingleton`, failures return the existing `{ error, issues }` 400 with field-prefixed issue paths, and the admin shows the message inline on the offending input (plus required markers, `maxLength`, and a pre-submit required check). Optional text/image/array fields left untouched now round-trip via schema defaults (`""` / `null` / `[]`) instead of writing unreadable files — and a YAML _sequence_ document no longer sneaks past the "must be a mapping" check as all-defaults.
+  - **Unsaved changes are guarded.** Navigating away from an edited entry/singleton (link click, tab close, reload) now asks for confirmation instead of silently discarding edits.
+  - **Entries can be deleted from the UI.** The DELETE API existed but nothing called it. The editor now has a two-step confirm delete that sends `baseVersion` (real 409 conflict handling); direct-publish roles return to the list, draft roles stay put with a "deletion opened as a draft PR" banner and link, since the entry remains published until the PR merges.
+  - **Failed loads show errors with a Retry button** instead of hanging forever: the entry list (which also crashed with a TypeError on a non-OK response body), the history panel, and the admin shell's own `/auth/me` check (one flaky request used to brick the whole admin on "Loading…").
+
+## 2.2.7
+
+### Patch Changes
+
+- 0902b35: Fix two more `cimisy import` correctness bugs found running it against a real app:
+
+  - **Codegen had zero awareness of `"use client"`.** `createReader` (`cimisy/next`) imports the `server-only` package, and every codemod path made the rewritten component's default export `async` — both are outright incompatible with a Client Component (`server-only` cannot load in a client bundle at all, and React doesn't support async Client Components regardless). `cimisy scan`/`cimisy import` now detect a file's `"use client"` directive and report its candidates as unanalyzable (`this file is a Client Component...`) instead of rewriting it into a page-breaking 500. Splitting such a file into a Server Component wrapper + inner Client Component is a bigger follow-up, not done here — this stops the crash safely in the meantime.
+  - **Boolean fields were coerced to text with the same generic note as numbers.** cimisy has no boolean field type, so a scanned `isPlaceholder: true` was proposed as `fields.text()` and stored as the literal string `"true"`/`"false"` — but unlike a number, this isn't display-safe: any non-empty string (including `"false"`) is truthy in JS, so a pre-existing `{field && <Badge/>}` check would render for both values after migrating, silently inverting whatever `false` meant. Boolean fields now get a distinct, explicit warning about this in the scan report, instead of the same "will be stored as text" note used for numbers.
+
 ## 2.2.6
 
 ### Patch Changes
