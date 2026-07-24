@@ -23,12 +23,32 @@ function tonesByBlockType(blockTypes: BlockTypeManifest[]): Record<string, strin
   return result;
 }
 
+/**
+ * Per-registry-key upload directory for every "image"-kind block type
+ * (see mdx/block-registry.ts's `image()` — its `directory` option lands
+ * here via uiOptions). Keyed by registry name rather than a single global
+ * value because a project can register more than one image-kind block
+ * (e.g. "image" and "heroImage") with different directories — mirrors
+ * tonesByBlockType's per-registry-key shape just above.
+ */
+function directoryByBlockType(blockTypes: BlockTypeManifest[]): Record<string, string | undefined> {
+  const result: Record<string, string | undefined> = {};
+  for (const t of blockTypes) {
+    if (t.kind === "image") result[t.name] = t.uiOptions?.directory as string | undefined;
+  }
+  return result;
+}
+
 export interface TiptapBlockEditorProps {
   field: FieldManifest;
   value: unknown;
   onChange: (value: BlockNode[]) => void;
   apiBasePath: string;
   draftRef?: string;
+  /** Same source of truth entry-form.tsx's FieldInput already passes to sibling ImageField instances — identifies the draft branch an Image block's uploads should land on (see route-handler.ts's resolveWriteRef). */
+  targetKey: string;
+  /** Null for a brand-new, never-saved entry — gates the Image block's upload/browse controls exactly like ImageField's own `slug` gate. */
+  slug: string | null;
 }
 
 /**
@@ -44,7 +64,7 @@ export interface TiptapBlockEditorProps {
  * (and thus reloads content) instead of trying to imperatively resync a
  * live document.
  */
-export function TiptapBlockEditor({ field, value, onChange, apiBasePath, draftRef }: TiptapBlockEditorProps) {
+export function TiptapBlockEditor({ field, value, onChange, apiBasePath, draftRef, targetKey, slug }: TiptapBlockEditorProps) {
   const blockTypes = useMemo(() => field.blockTypes ?? [], [field.blockTypes]);
   const manifestByName = useMemo(() => buildManifestLookup(blockTypes), [blockTypes]);
   // Empty deps is intentional: captured once on mount, never resynced from
@@ -74,7 +94,7 @@ export function TiptapBlockEditor({ field, value, onChange, apiBasePath, draftRe
         CimisyParagraph,
         CimisyHeading,
         CimisyCodeBlock,
-        CimisyImage.configure({ apiBasePath, draftRef }),
+        CimisyImage.configure({ apiBasePath, draftRef, targetKey, slug, directoryByBlockType: directoryByBlockType(blockTypes) }),
         CimisyCallout.configure({ tonesByBlockType: tonesByBlockType(blockTypes) }),
         CimisyCustomBlock.configure({ manifestByName }),
         Link.configure({ openOnClick: false, autolink: false, validate: isSafeUrl }),

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ResolvedCimisyConfig } from "../config/define-config.js";
+import type { BlocksFieldDefinition } from "../config/fields/blocks.js";
 import type { ImageFieldDefinition } from "../config/fields/image.js";
 import type { SeoFieldDefinition } from "../config/fields/seo.js";
 import { UnsafePathError, ValidationError } from "../shared/errors.js";
@@ -109,7 +110,17 @@ export function assertPathUnderConfiguredDirectory(path: string, configuredDirec
   }
 }
 
-/** Every distinct `directory` any `fields.image()` in the project's schemas (collections and singletons alike) declares — the allowlist the media API validates uploads/reads against. */
+/**
+ * Every distinct `directory` any `fields.image()`/`fields.seo()` in the
+ * project's schemas (collections and singletons alike) declares, PLUS any
+ * `directory` a `blocks.image({ directory })` registered inside a
+ * `fields.blocks()` field declares — the allowlist the media API
+ * validates uploads/reads against. Skipping the blocks registry here
+ * would silently break the rich-text editor's per-image-block upload/
+ * browse UI (nodes.tsx's ImageNodeView): it would send a directory the
+ * server has never heard of, and assertConfiguredDirectory would reject
+ * it regardless of the directory being a real, intentional value.
+ */
 export function getConfiguredImageDirectories(cimisyConfig: ResolvedCimisyConfig): string[] {
   const directories = new Set<string>();
   const schemas = [
@@ -124,6 +135,13 @@ export function getConfiguredImageDirectories(cimisyConfig: ResolvedCimisyConfig
       if (field.kind === "seo") {
         const imageDirectory = (field as SeoFieldDefinition).imageDirectory;
         if (imageDirectory) directories.add(imageDirectory);
+      }
+      if (field.kind === "blocks") {
+        for (const blockDef of Object.values((field as BlocksFieldDefinition).registry)) {
+          if (blockDef.kind !== "image") continue;
+          const directory = (blockDef.uiOptions as { directory?: string } | undefined)?.directory;
+          if (directory) directories.add(directory);
+        }
       }
     }
   }
