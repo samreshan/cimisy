@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collection, config, fields, page, section, singleton } from "../../config/index.js";
+import { blocks, collection, config, fields, page, section, singleton } from "../../config/index.js";
 import { LocalStorageAdapter } from "../../storage/local.js";
 import { buildAdminManifest } from "../manifest.js";
 
@@ -76,6 +76,29 @@ describe("buildAdminManifest — hierarchy projection", () => {
     const manifest = buildAdminManifest(buildMixedConfig());
     const seoField = manifest.byKey["posts"]?.fields.find((f) => f.kind === "seo");
     expect(seoField?.directory).toBe("content/uploads");
+  });
+
+  it("exposes a blocks.image() block's directory on its blockType manifest's uiOptions, for the rich-text editor's upload/browse UI to read (see react/admin/editor/block-editor.tsx's directoryByBlockType)", () => {
+    const manifest = buildAdminManifest(
+      config({
+        source: new LocalStorageAdapter({ rootDir: "/tmp/cimisy-manifest-test", allowInProduction: true }),
+        collections: {
+          posts: collection({
+            label: "Posts",
+            path: "content/posts/*.mdx",
+            slugField: "slug",
+            schema: {
+              title: fields.text({ label: "Title" }),
+              slug: fields.slug({ source: "title" }),
+              body: fields.blocks({ label: "Body", blocks: { image: blocks.image({ directory: "content/uploads" }) } }),
+            },
+          }),
+        },
+      }),
+    );
+    const bodyField = manifest.byKey["posts"]?.fields.find((f) => f.kind === "blocks");
+    const imageBlockType = bodyField?.blockTypes?.find((t) => t.name === "image");
+    expect(imageBlockType?.uiOptions).toEqual({ directory: "content/uploads" });
   });
 
   it("is JSON-serializable — no zod schemas, adapters, or functions leak to the client", () => {

@@ -129,7 +129,20 @@ export function code(options: CodeOptions = {}): BlockDefinition<{ code: string;
 }
 
 export interface ImageOptions {
-  /** Repo-relative directory new uploads are written under (upload UI ships in a later milestone). */
+  /**
+   * Repo-relative directory new uploads (via the rich-text editor's Image
+   * block NodeView — react/admin/editor/nodes.tsx) are written under, and
+   * the media library is browsed against. Optional, unlike
+   * `fields.image()`'s required `directory`, purely for back-compat with
+   * `blocks.image()` calls written before uploading was possible at all —
+   * omitting it just means that block's NodeView shows no upload/browse
+   * controls (mirroring how ImageField behaves before an entry has a
+   * slug), never a fallback to an unconfigured/implicit directory. Must
+   * also appear as some `fields.image()`/`fields.seo()` directory, or be
+   * otherwise reachable via `getConfiguredImageDirectories` (content/
+   * media.ts scans this registry too), or uploads will be rejected
+   * server-side by assertConfiguredDirectory's allowlist check.
+   */
   directory?: string;
 }
 
@@ -141,10 +154,10 @@ export interface ImageOptions {
  * which is what rules out attribute-breakout injection at the source.
  */
 export function image(options: ImageOptions = {}): BlockDefinition<{ src: string; alt: string }> {
-  void options;
   return {
     kind: "image",
     propsSchema: z.object({ src: z.string(), alt: z.string() }).strict(),
+    uiOptions: { directory: options.directory },
     jsxName: "Image",
     toMdxNode: ({ src, alt }) =>
       ({

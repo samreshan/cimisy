@@ -4,13 +4,18 @@ import { useRef, useState } from "react";
 import type { FieldManifest } from "../../next/manifest.js";
 import { apiUrl } from "./api.js";
 
-interface MediaFile {
+export interface MediaFile {
   path: string;
   version: string;
 }
 
-/** Reads a File as base64 (no data: URL prefix) — the shape POST /media expects. */
-function fileToBase64(file: File): Promise<string> {
+/**
+ * Reads a File as base64 (no data: URL prefix) — the shape POST /media
+ * expects. Exported so the rich-text editor's Image block NodeView
+ * (editor/nodes.tsx's ImageNodeView) can reuse the exact same upload
+ * encoding instead of re-implementing it.
+ */
+export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {

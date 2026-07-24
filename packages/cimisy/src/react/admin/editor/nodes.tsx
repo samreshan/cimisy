@@ -2,10 +2,11 @@
 
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer } from "@tiptap/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { BlockTypeManifest } from "../../../next/manifest.js";
 import { BlockPropsEditor } from "../blocks-fallback.js";
 import { apiUrl } from "../api.js";
+import { fileToBase64, type MediaFile } from "../image-field.js";
 import { CUSTOM_BLOCK_NODE_TYPE } from "./convert.js";
 
 /**
@@ -104,21 +105,151 @@ function ImageNodeView({
   updateAttributes: (attrs: Record<string, unknown>) => void;
   extension: { options: ImageBlockOptions };
 }) {
-  const { apiBasePath, draftRef } = extension.options;
+  const { apiBasePath, draftRef, targetKey, slug, directoryByBlockType } = extension.options;
   const src = typeof node.attrs.src === "string" ? node.attrs.src : "";
   const alt = typeof node.attrs.alt === "string" ? node.attrs.alt : "";
+  const blockType = typeof node.attrs.blockType === "string" ? node.attrs.blockType : "image";
+  const directory = directoryByBlockType[blockType];
   const [editingAlt, setEditingAlt] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState(false);
+  const [existing, setExisting] = useState<MediaFile[] | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const thumbnailSrc = src
-    ? apiUrl(apiBasePath, `/media/raw?${new URLSearchParams({ path: src, ...(draftRef ? { ref: draftRef } : {}) }).toString()}`)
-    : null;
+  function thumbnailUrl(path: string): string {
+    const params = new URLSearchParams({ path, ...(draftRef ? { ref: draftRef } : {}) });
+    return apiUrl(apiBasePath, `/media/raw?${params.toString()}`);
+  }
+
+  const thumbnailSrc = src ? thumbnailUrl(src) : null;
+
+  async function handleFileSelected(file: File) {
+    if (!directory || !slug) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const content = await fileToBase64(file);
+      const res = await fetch(apiUrl(apiBasePath, "/media"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetKey, slug, directory, filename: file.name, content }),
+      });
+      const data = (await res.json()) as { path?: string; error?: string };
+      if (!res.ok || !data.path) {
+        setError(data.error ?? "Upload failed.");
+        return;
+      }
+      updateAttributes({ src: data.path });
+    } catch {
+      setError("Upload failed.");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function openBrowse() {
+    if (!directory) return;
+    setBrowsing(true);
+    setError(null);
+    setExisting(null);
+    const params = new URLSearchParams({ directory, ...(draftRef ? { ref: draftRef } : {}) });
+    const res = await fetch(apiUrl(apiBasePath, `/media?${params.toString()}`));
+    const data = (await res.json()) as { files?: MediaFile[]; error?: string };
+    if (!res.ok) {
+      setError(data.error ?? "Failed to load existing uploads.");
+      setBrowsing(false);
+      return;
+    }
+    setExisting(data.files ?? []);
+  }
 
   return (
     <NodeViewWrapper className="cimisy-editor-image-block" data-drag-handle>
+      {error && (
+        <p className="cimisy-banner cimisy-banner-danger" role="alert">
+          {error}
+        </p>
+      )}
       {thumbnailSrc ? (
         <img src={thumbnailSrc} alt={alt} style={{ maxWidth: "100%", maxHeight: 320, borderRadius: 8, display: "block" }} />
       ) : (
-        <div className="cimisy-empty">No image selected — use the "Image" props form to set one.</div>
+        <div className="cimisy-empty">No image selected.</div>
+      )}
+      <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }} contentEditable={false}>
+        {!directory ? (
+          <span className="cimisy-muted" style={{ fontSize: "0.85em" }}>
+            Uploads aren&apos;t configured for this block — add a <code>directory</code> to its{" "}
+            <code>blocks.image()</code> registration.
+          </span>
+        ) : !slug ? (
+          <span className="cimisy-muted" style={{ fontSize: "0.85em" }}>
+            Save the entry first to enable uploads.
+          </span>
+        ) : (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleFileSelected(file);
+              }}
+            />
+            <button
+              type="button"
+              className="cimisy-btn cimisy-btn-secondary"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {uploading ? "Uploading…" : src ? "Replace…" : "Upload…"}
+            </button>
+            <button type="button" className="cimisy-btn cimisy-btn-secondary" onClick={openBrowse}>
+              Browse existing…
+            </button>
+          </>
+        )}
+      </div>
+      {browsing && (
+        <div className="cimisy-block-list" style={{ marginTop: 10 }} contentEditable={false}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span className="cimisy-muted" style={{ fontSize: "0.85em" }}>
+              Existing uploads
+            </span>
+            <button type="button" className="cimisy-btn cimisy-btn-ghost" onClick={() => setBrowsing(false)}>
+              Close
+            </button>
+          </div>
+          {existing === null ? (
+            <div className="cimisy-skeleton" style={{ height: 72 }} role="status" aria-label="Loading uploads" />
+          ) : existing.length === 0 ? (
+            <p className="cimisy-muted">No uploads yet.</p>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {existing.map((f) => (
+                <button
+                  key={f.path}
+                  type="button"
+                  onClick={() => {
+                    updateAttributes({ src: f.path });
+                    setBrowsing(false);
+                  }}
+                  style={{ border: "none", background: "none", padding: 0, cursor: "pointer" }}
+                  aria-label={`Use ${f.path.split("/").pop() ?? f.path}`}
+                >
+                  <img
+                    src={thumbnailUrl(f.path)}
+                    alt={f.path.split("/").pop() ?? f.path}
+                    style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 6 }}
+                  />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       <div style={{ marginTop: 6 }}>
         {editingAlt ? (
@@ -143,23 +274,31 @@ function ImageNodeView({
 interface ImageBlockOptions {
   apiBasePath: string;
   draftRef?: string;
+  /** Same source of truth as sibling ImageField instances in the same entry form (see entry-form.tsx's FieldInput) — identifies the draft branch uploads should land on. */
+  targetKey: string;
+  /** Null for a brand-new, never-saved entry — gates uploads exactly like ImageField's own `slug` gate. */
+  slug: string | null;
+  /** Per-registry-key upload directory (see block-editor.tsx's directoryByBlockType) — keyed by the node's `blockType` attr, not by this node's fixed ProseMirror type name, since a project can register more than one "image"-kind block with different directories. */
+  directoryByBlockType: Record<string, string | undefined>;
 }
 
 /**
  * Atom node (no editable inline content of its own — src/alt are edited
  * through the NodeView UI, not by typing into the document). Uploading a
- * *new* image into this block reuses the same POST /media flow as
- * ImageField (see react/admin/image-field.tsx); `apiBasePath`/`draftRef`
- * are threaded in via extension options at editor-creation time (see
- * block-editor.tsx) since NodeViews have no other way to reach outside
- * the ProseMirror document.
+ * *new* image into this block reuses the exact same POST /media flow as
+ * ImageField (see react/admin/image-field.tsx — fileToBase64/MediaFile
+ * are imported from there rather than reimplemented), and a "Browse
+ * existing…" picker reuses the same GET /media flow. `apiBasePath`/
+ * `draftRef`/`targetKey`/`slug`/`directoryByBlockType` are threaded in via
+ * extension options at editor-creation time (see block-editor.tsx) since
+ * NodeViews have no other way to reach outside the ProseMirror document.
  */
 export const CimisyImage = Node.create<ImageBlockOptions>({
   name: "cimisyImage",
   group: "block",
   atom: true,
   addOptions() {
-    return { apiBasePath: "" };
+    return { apiBasePath: "", targetKey: "", slug: null, directoryByBlockType: {} };
   },
   addAttributes() {
     return { src: { default: "" }, alt: { default: "" }, ...blockAttributes("image") };

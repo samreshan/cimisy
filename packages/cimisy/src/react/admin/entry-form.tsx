@@ -568,6 +568,8 @@ function FieldInput({
         onChange={onChange}
         apiBasePath={apiBasePath}
         draftRef={draftRef}
+        targetKey={targetKey}
+        slug={slug}
       />
     );
   }

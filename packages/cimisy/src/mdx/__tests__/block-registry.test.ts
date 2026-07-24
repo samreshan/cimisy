@@ -127,6 +127,14 @@ describe("block registry round-trips", () => {
     expect(parsed[0]?.props).toEqual({ src: "/img/a.png", alt: 'A "quoted" & <tricky> value' });
   });
 
+  it("image: an explicit directory surfaces on uiOptions (the admin manifest's channel for the rich-text editor's upload/browse UI — see next/manifest.ts and react/admin/editor/nodes.tsx)", () => {
+    expect(image({ directory: "content/uploads" }).uiOptions).toEqual({ directory: "content/uploads" });
+  });
+
+  it("image: omitting directory leaves it undefined on uiOptions rather than defaulting to a guessed value", () => {
+    expect(image().uiOptions).toEqual({ directory: undefined });
+  });
+
   it("callout: tone and content survive round-trip", () => {
     const registry = { callout: callout({ tones: ["info", "warning"] }) };
     const { parsed } = roundTrip(

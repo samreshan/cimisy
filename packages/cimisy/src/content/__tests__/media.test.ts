@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { blocks, collection, config, fields } from "../../config/index.js";
+import type { FieldDefinition } from "../../config/fields/types.js";
+import { LocalStorageAdapter } from "../../storage/local.js";
 import { UnsafePathError, ValidationError } from "../../shared/errors.js";
 import {
   MAX_UPLOAD_BYTES,
@@ -6,6 +9,7 @@ import {
   assertPathUnderConfiguredDirectory,
   buildMediaPath,
   decodeUploadedImage,
+  getConfiguredImageDirectories,
   sniffImageType,
 } from "../media.js";
 
@@ -117,5 +121,67 @@ describe("assertPathUnderConfiguredDirectory", () => {
   });
   it("rejects a sibling directory that merely shares a prefix", () => {
     expect(() => assertPathUnderConfiguredDirectory("uploads-secret/a.png", ["uploads"])).toThrow(UnsafePathError);
+  });
+});
+
+describe("getConfiguredImageDirectories", () => {
+  function cfg(schema: Record<string, FieldDefinition>) {
+    return config({
+      source: new LocalStorageAdapter({ rootDir: "/tmp/cimisy-media-test", allowInProduction: true }),
+      collections: {
+        posts: collection({ label: "Posts", path: "content/posts/*.mdx", slugField: "slug", schema }),
+      },
+    });
+  }
+
+  it("includes a directory declared by a blocks.image() registered inside a fields.blocks() field", () => {
+    const directories = getConfiguredImageDirectories(
+      cfg({
+        title: fields.text({ label: "Title" }),
+        slug: fields.slug({ source: "title" }),
+        body: fields.blocks({ label: "Body", blocks: { image: blocks.image({ directory: "content/uploads" }) } }),
+      }),
+    );
+    expect(directories).toEqual(["content/uploads"]);
+  });
+
+  it("omits an image-kind block that didn't configure a directory (upload UI disabled for it, not defaulted to something unconfigured)", () => {
+    const directories = getConfiguredImageDirectories(
+      cfg({
+        title: fields.text({ label: "Title" }),
+        slug: fields.slug({ source: "title" }),
+        body: fields.blocks({ label: "Body", blocks: { image: blocks.image() } }),
+      }),
+    );
+    expect(directories).toEqual([]);
+  });
+
+  it("dedupes a blocks.image() directory that's also used by a sibling fields.image()", () => {
+    const directories = getConfiguredImageDirectories(
+      cfg({
+        title: fields.text({ label: "Title" }),
+        slug: fields.slug({ source: "title" }),
+        cover: fields.image({ label: "Cover", directory: "content/uploads" }),
+        body: fields.blocks({ label: "Body", blocks: { image: blocks.image({ directory: "content/uploads" }) } }),
+      }),
+    );
+    expect(directories).toEqual(["content/uploads"]);
+  });
+
+  it("collects directories from multiple distinct image-kind blocks registered under different keys", () => {
+    const directories = getConfiguredImageDirectories(
+      cfg({
+        title: fields.text({ label: "Title" }),
+        slug: fields.slug({ source: "title" }),
+        body: fields.blocks({
+          label: "Body",
+          blocks: {
+            image: blocks.image({ directory: "content/uploads" }),
+            heroImage: blocks.image({ directory: "content/hero" }),
+          },
+        }),
+      }),
+    );
+    expect(directories.sort()).toEqual(["content/hero", "content/uploads"]);
   });
 });
