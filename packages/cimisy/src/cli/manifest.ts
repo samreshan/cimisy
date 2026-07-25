@@ -57,15 +57,96 @@ export function suggestAppName(repo: string): string {
   return `cimisy-${slug}`.slice(0, MAX_APP_NAME_LENGTH).replace(/-+$/, "");
 }
 
+/**
+ * Public suffixes that are two labels rather than one, so that
+ * `samreshan.com.np` reads as an apex domain and not as a subdomain of
+ * `com.np`. A regex over the common second-level patterns rather than the
+ * full Public Suffix List: this only decides whether to offer a `www.`
+ * sibling, and the cost of a miss is one unused callback URL, not a
+ * security boundary.
+ */
+const MULTI_LABEL_PUBLIC_SUFFIX = /^(?:com|co|net|org|edu|gov|ac|or|ne|gob|mil|govt|sch|res|web|info)\.[a-z]{2}$/;
+
+/**
+ * Multi-tenant hosting domains, where `www.<project>` is a different site
+ * (or nobody's site) rather than the same one. Never pair across these.
+ */
+const PLATFORM_SUFFIXES = [
+  "vercel.app",
+  "netlify.app",
+  "pages.dev",
+  "workers.dev",
+  "onrender.com",
+  "fly.dev",
+  "github.io",
+  "herokuapp.com",
+  "deno.dev",
+  "railway.app",
+  "azurewebsites.net",
+  "appspot.com",
+  "surge.sh",
+];
+
+function isPlatformHost(host: string): boolean {
+  return PLATFORM_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+}
+
+/** True when `host` is the registrable domain itself — `example.com`, `samreshan.com.np` — and not a subdomain of one. */
+function isApexHost(host: string): boolean {
+  if (host === "localhost" || /^[\d.]+$/.test(host) || host.includes(":")) return false;
+  const labels = host.split(".");
+  if (labels.length < 2) return false;
+  const suffixLabels = MULTI_LABEL_PUBLIC_SUFFIX.test(labels.slice(-2).join(".")) ? 2 : 1;
+  return labels.length === suffixLabels + 1;
+}
+
+/**
+ * The origin as given, plus its apex/`www.` sibling when there is one.
+ *
+ * GitHub Apps match `redirect_uri` byte-for-byte against the registered
+ * callback list — no wildcards, and `example.com` and `www.example.com`
+ * are two unrelated entries as far as that check is concerned. Whoever
+ * types one of them at setup time owns the DNS for the other, and which
+ * of the two a browser ends up on is decided later by a redirect rule or
+ * by whichever domain the host platform reports as canonical. Registering
+ * the pair up front is what stops that from surfacing as
+ * "redirect_uri is not associated with this application" at first sign-in.
+ *
+ * Only that one pairing is derived, and only for a real registrable
+ * domain: `blog.example.com` gets no `www.blog…` sibling, and no `*.vercel.app`
+ * project gets one either. Never widened to a host the user might not
+ * control — a callback URL is where an authorization code gets delivered.
+ */
+export function callbackOriginVariants(origin: string): string[] {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return [trimTrailingSlash(origin)];
+  }
+
+  const canonical = url.origin;
+  const host = url.hostname.toLowerCase();
+  if (isPlatformHost(host)) return [canonical];
+
+  const siblingHost = host.startsWith("www.") ? host.slice(4) : isApexHost(host) ? `www.${host}` : null;
+  if (!siblingHost || isPlatformHost(siblingHost) || !isApexHost(siblingHost.replace(/^www\./, ""))) return [canonical];
+
+  const sibling = new URL(url.toString());
+  sibling.hostname = siblingHost;
+  return [canonical, sibling.origin];
+}
+
 export function buildAppManifest(options: BuildAppManifestOptions): GithubAppManifest {
   const localOrigin = options.localOrigin ?? "http://localhost:3000";
 
-  // Both origins are registered up front. GitHub Apps allow up to 10
+  // Every origin is registered up front. GitHub Apps allow up to 10
   // callback URLs, and registering the localhost one now removes the
   // single most common follow-up support question ("sign-in works in
   // production but not on my machine") — there is no cost to declaring it.
+  // Same reasoning for the apex/www sibling; see callbackOriginVariants.
   const callbackUrls = [
-    ...(options.productionOrigin ? [`${trimTrailingSlash(options.productionOrigin)}${AUTH_CALLBACK_PATH}`] : []),
+    ...(options.productionOrigin ? callbackOriginVariants(options.productionOrigin) : []).map((origin) => `${origin}${AUTH_CALLBACK_PATH}`),
     `${trimTrailingSlash(localOrigin)}${AUTH_CALLBACK_PATH}`,
   ];
 
