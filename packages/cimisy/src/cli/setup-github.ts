@@ -274,6 +274,12 @@ export async function runSetupGithubCommand(options: SetupGithubOptions): Promis
   for (const key of merged.added) clack.log.info(`  + ${key}`);
   for (const key of merged.updated) clack.log.info(`  ~ ${key} (replaced)`);
   for (const key of merged.unchanged) clack.log.info(`  = ${key} (already correct)`);
+  // Said out loud rather than silently: these lines were removed from a
+  // file cimisy doesn't own. They were duplicate assignments that would
+  // otherwise have shadowed what was just written (.env is last-one-wins).
+  for (const key of merged.removedDuplicates) {
+    clack.log.warn(`  - ${key} (removed a duplicate later in the file — it would have overridden the value above)`);
+  }
 
   const gitignorePath = path.join(projectRoot, ".gitignore");
   const gitignore = await readFileOrEmpty(gitignorePath);

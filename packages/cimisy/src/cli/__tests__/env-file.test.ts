@@ -120,6 +120,57 @@ describe("mergeEnvFile", () => {
     expect(result.added).toEqual(["CIMISY_GITHUB_REPO"]);
   });
 
+  // .env files are last-one-wins, so a duplicate assignment below the one
+  // we rewrote would silently override it — the wizard would report success
+  // while the app kept loading the old credentials.
+  it("removes a later duplicate of a key it sets, so the written value is the one that loads", () => {
+    const existing = "CIMISY_GITHUB_REPO=stale/one\nOTHER=x\nCIMISY_GITHUB_REPO=stale/two\n";
+    const result = mergeEnvFile(existing, { CIMISY_GITHUB_REPO: "new/repo" });
+    expect(result.updated).toEqual(["CIMISY_GITHUB_REPO"]);
+    expect(result.removedDuplicates).toEqual(["CIMISY_GITHUB_REPO"]);
+    expect(result.content.match(/^CIMISY_GITHUB_REPO=/gm)).toHaveLength(1);
+    expect(parseEnvFile(result.content).CIMISY_GITHUB_REPO).toBe("new/repo");
+    expect(result.content).toContain("OTHER=x");
+    expect(result.content).not.toContain("stale/two");
+  });
+
+  it("removes duplicates even when the first occurrence already had the right value", () => {
+    const existing = 'CIMISY_SOURCE="github"\nCIMISY_SOURCE=local\n';
+    const result = mergeEnvFile(existing, { CIMISY_SOURCE: "github" });
+    expect(result.unchanged).toEqual(["CIMISY_SOURCE"]);
+    expect(result.removedDuplicates).toEqual(["CIMISY_SOURCE"]);
+    expect(parseEnvFile(result.content).CIMISY_SOURCE).toBe("github");
+  });
+
+  it("only ever removes duplicates of keys it is explicitly setting", () => {
+    const existing = "UNRELATED=one\nUNRELATED=two\n";
+    const result = mergeEnvFile(existing, { CIMISY_SOURCE: "github" });
+    expect(result.removedDuplicates).toEqual([]);
+    expect(result.content).toContain("UNRELATED=one");
+    expect(result.content).toContain("UNRELATED=two");
+  });
+
+  // An unterminated quote used to make readValueSpan run to end-of-file:
+  // parseEnvFile then returned undefined for every key below it, and
+  // replacing such a key would have deleted those lines outright.
+  it("treats an unterminated quote as a single malformed line, not as a value running to EOF", () => {
+    const existing = 'BROKEN="oops\nDATABASE_URL=postgres://keep-me\nAPI_KEY=also-keep\n';
+    expect(parseEnvFile(existing).DATABASE_URL).toBe("postgres://keep-me");
+    expect(parseEnvFile(existing).API_KEY).toBe("also-keep");
+
+    const result = mergeEnvFile(existing, { CIMISY_SOURCE: "github" });
+    expect(result.content).toContain("DATABASE_URL=postgres://keep-me");
+    expect(result.content).toContain("API_KEY=also-keep");
+  });
+
+  it("does not delete the rest of the file when replacing a key whose quote never closes", () => {
+    const existing = 'CIMISY_GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nDATABASE_URL=postgres://keep-me\nAPI_KEY=also-keep\n';
+    const result = mergeEnvFile(existing, { CIMISY_GITHUB_APP_PRIVATE_KEY: PEM });
+    expect(result.content).toContain("DATABASE_URL=postgres://keep-me");
+    expect(result.content).toContain("API_KEY=also-keep");
+    expect(parseEnvFile(result.content).CIMISY_GITHUB_APP_PRIVATE_KEY).toBe(PEM);
+  });
+
   it("always leaves the file ending in a newline", () => {
     expect(mergeEnvFile("FOO=bar", { CIMISY_SOURCE: "github" }).content.endsWith("\n")).toBe(true);
     expect(mergeEnvFile("FOO=bar", {}).content.endsWith("\n")).toBe(true);

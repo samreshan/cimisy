@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSourceFromEnv } from "../../env/resolve-source.js";
 import { CimisyError } from "../../shared/errors.js";
 import { isUnconfiguredSource, unconfiguredSource } from "../unconfigured.js";
@@ -85,6 +85,51 @@ describe("resolveSourceFromEnv onIncomplete", () => {
   });
 
   it("never yields a placeholder when the environment is complete or plainly local", () => {
+    expect(resolveSourceFromEnv({ contentDir: "content", env: {}, onIncomplete: "placeholder" }).kind).toBe("local");
+  });
+});
+
+/**
+ * The most common first-deploy state: someone pushes to Vercel before
+ * running `cimisy setup github`, so no cimisy variables exist at all. That
+ * resolves to "local", and the local adapter refuses NODE_ENV=production —
+ * which used to throw at config import and fail the entire build.
+ */
+describe("resolveSourceFromEnv with nothing configured, in production", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("serves the placeholder instead of crashing the build", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const source = resolveSourceFromEnv({ contentDir: "content", env: {}, onIncomplete: "placeholder" });
+      expect(isUnconfiguredSource(source)).toBe(true);
+      expect(isUnconfiguredSource(source) && source.missing).toContain("CIMISY_GITHUB_APP_ID");
+      expect(String(warn.mock.calls[0]?.[0])).toContain("No content source is configured for production");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("still refuses outright under the default onIncomplete — the guard rail is unchanged", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    expect(() => resolveSourceFromEnv({ contentDir: "content", env: {} })).toThrow(/NODE_ENV=production/);
+  });
+
+  it("respects an explicit CIMISY_ALLOW_LOCAL_PROD opt-in rather than overriding it", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const source = resolveSourceFromEnv({
+      contentDir: "content",
+      env: { CIMISY_ALLOW_LOCAL_PROD: "true" },
+      onIncomplete: "placeholder",
+    });
+    expect(source.kind).toBe("local");
+  });
+
+  it("leaves development alone — local dev with no variables is the normal case", () => {
+    vi.stubEnv("NODE_ENV", "development");
     expect(resolveSourceFromEnv({ contentDir: "content", env: {}, onIncomplete: "placeholder" }).kind).toBe("local");
   });
 });

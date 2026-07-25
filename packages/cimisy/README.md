@@ -123,6 +123,10 @@ It asks for the repo (`owner/repo`), whether that's a personal account or an org
 
 Both your production callback URL and `http://localhost:3000/api/cimisy/auth/callback` are registered up front, so local sign-in works too without a second trip to GitHub.
 
+**The App must be owned by the same account that owns your content repo.** The wizard asks whether the owner is a personal account or an organization and registers the App in the right place, so this normally takes care of itself. If your repo lives in an org and you answer "personal account", the App will be created but you won't be able to install it on that repo. If you can't create Apps in the org, ask an owner to run the wizard, or to grant you the permission.
+
+You never install someone else's App, and cimisy publishes none — the App is yours, private to your account, and its private key never leaves your deployment.
+
 Prefer to do it by hand, or on a machine with no browser? See [Appendix: registering the App by hand](#appendix-registering-the-app-by-hand).
 
 > `CIMISY_CONFIG` contains your App private key, client secret, and session secret. It's exactly as sensitive as the individual variables it replaces — paste it into a deployment platform's environment settings, never into an issue, a PR, or a chat.
@@ -162,6 +166,12 @@ With nothing set, that resolves to the local adapter rooted at `contentDir` — 
 | `CIMISY_SESSION_SECRET` | yes | ≥32 characters; signs the admin session cookie |
 | `CIMISY_ALLOW_LOCAL_PROD` | no | `true` lets the local adapter run under `NODE_ENV=production`. Only for a controlled internal tool with its own access control in front. |
 
+One more, independent of the two forms above and never part of the blob:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `CIMISY_PUBLIC_URL` | no | Your app's real public origin, e.g. `https://cms.example.com`. Only needed behind a proxy or custom domain that rewrites `Host`. On Vercel, `VERCEL_PROJECT_PRODUCTION_URL` is picked up automatically. Set it per-environment, never in `.env.local` — see [Deploying to Vercel](#deploying-to-vercel). |
+
 `CIMISY_CONFIG` wins if both forms are set, and the two never merge — it's all-or-nothing, so there's always one answer to "which value is live?". cimisy logs a one-line warning when it finds both.
 
 **`onIncomplete`** decides what happens when `CIMISY_SOURCE=github` but some variables are missing:
@@ -194,15 +204,73 @@ Exit code is `0` when everything passes, `1` if any check failed, `2` on CLI mis
 
 ## Deploying to Vercel
 
-1. `npx cimisy setup github` on your machine. Accept the offer to set `CIMISY_CONFIG` for you, or copy the line it prints into **Project → Settings → Environment Variables**.
-2. Redeploy — environment variables only take effect on a new build.
-3. Open `https://your-app.vercel.app/admin` and sign in with GitHub.
+Two commands and one paste. Do it in this order — setting the variable *before* the first deploy is what makes it a two-step.
 
-That's the whole list; `CIMISY_CONFIG` is the only cimisy variable you need. Other platforms are the same shape — e.g. `netlify env:set CIMISY_CONFIG "<value>"`, or whatever your host calls environment settings.
+**1. Register the App and get your variable**
 
-If `/admin` shows an instructions page instead of the CMS, the variable didn't reach that deployment — the page lists exactly which values are missing. Run `npx cimisy doctor` locally to check the same configuration from your terminal.
+From your project directory, on your own machine:
 
-One production note that isn't about setup: the default rate limiter is in-memory, which doesn't hold across serverless instances. Pass your own `rateLimiter` backed by shared storage for anything beyond small single-instance deployments — see [Security](#security).
+```sh
+npx cimisy setup github
+```
+
+Answer three questions (repo, personal-or-org, your Vercel URL), click **Create GitHub App** in the browser tab it opens, then install the App on your repo. It prints one line:
+
+```
+CIMISY_CONFIG=eyJ2IjoxLCJyZXBvIjoi…
+```
+
+**2. Put that variable on Vercel**
+
+If the project is already linked (`vercel link`), the wizard offers to do this for you — say yes and skip ahead. Otherwise, either:
+
+```sh
+vercel env add CIMISY_CONFIG production
+# paste the value when prompted
+```
+
+or **Vercel → your project → Settings → Environment Variables → Add**, name `CIMISY_CONFIG`, paste the value, scope it to **Production**.
+
+**3. Deploy**
+
+```sh
+vercel --prod
+```
+
+Open `https://your-app.vercel.app/admin` and sign in with GitHub. You're the repo owner, so you bootstrap as admin automatically; everyone else who signs in starts pending until you give them a role from the **Team** screen.
+
+That's it. `CIMISY_CONFIG` is the only variable cimisy needs — it carries the repo, App id, private key, client id and secret, and session secret. There's nothing else to configure, and no `vercel.json` to write.
+
+Other hosts are the same shape: `netlify env:set CIMISY_CONFIG "<value>"`, `fly secrets set`, or whatever your platform calls environment settings.
+
+### If something's off
+
+| What you see | What it means |
+|---|---|
+| `/admin` shows a setup instructions page | The variable didn't reach this deployment. The page lists exactly which values are missing. Check it's scoped to the right environment, then **redeploy** — env vars only apply to a new build. |
+| Build fails with `SOURCE_UNCONFIGURED` | Same cause, but a public page prerenders content through `createReader`, so the build can't finish without a source. Set the variable and redeploy, or make that page dynamic — see [Environment variables](#environment-variables). |
+| GitHub says "redirect_uri is not associated with this application" | The URL you signed in from isn't a registered callback. See "Preview deployments" below. |
+| Sign-in works, but you land on "pending" | Your GitHub collaborator permission on the content repo is below Admin/Maintain. See [RBAC guide](#rbac-guide). |
+
+Run `npx cimisy doctor` locally at any point to check the same configuration from your terminal.
+
+### Preview deployments
+
+Every Vercel preview gets its own hostname, and GitHub Apps don't support wildcard callback URLs — so a preview's sign-in URL is never one you registered. cimisy handles this for you: it reads Vercel's `VERCEL_PROJECT_PRODUCTION_URL` and points the OAuth round trip at your **stable production domain**, so signing in from a preview lands you on production `/admin`. Content still comes from the same repo, so that's usually what you wanted.
+
+If you'd rather each preview sign in against itself, add its URL to the App's callback list (max 10), or set `CIMISY_PUBLIC_URL` on that environment.
+
+Behind a proxy or custom domain that rewrites `Host` — anywhere the server's view of the URL differs from the browser's — set `CIMISY_PUBLIC_URL` to your real public origin:
+
+```
+CIMISY_PUBLIC_URL=https://cms.example.com
+```
+
+Leave it unset otherwise; cimisy uses the request's own origin, which is right for a normal deployment. Don't put it in `.env.local` — pinning your local dev server to a production origin breaks localhost sign-in.
+
+### A note on the rate limiter
+
+Not about setup, but it matters in production: the default rate limiter is in-memory, so on serverless each instance gets its own bucket and the limit isn't really enforced. Pass your own `rateLimiter` backed by shared storage (Upstash, Vercel KV, Redis) for anything beyond a small single-instance deployment — see [Security](#security). `cimisy doctor` warns when it can't find one.
 
 ## Config reference
 

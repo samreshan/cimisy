@@ -24,6 +24,8 @@ export interface EnvFileMergeResult {
   updated: string[];
   /** Keys already present with exactly this value — a re-run writes nothing for these. */
   unchanged: string[];
+  /** Keys that appeared more than once and whose later, now-shadowing assignments were dropped. See mergeEnvFile. */
+  removedDuplicates: string[];
 }
 
 /** Matches an assignment line, capturing an optional `export ` prefix and the key. */
@@ -123,16 +125,27 @@ function readValueSpan(lines: string[], startIndex: number, rawValue: string): {
     raw += `\n${lines[i]!}`;
     if (lines[i]!.includes(quote)) return { raw, endIndex: i };
   }
-  // Unterminated quote — treat it as ending at the last line rather than
-  // silently swallowing the rest of the file into one key.
-  return { raw, endIndex: lines.length - 1 };
+  // Unterminated quote: the value never closes anywhere in the file, so
+  // this is a malformed line rather than a real multi-line value. Stop at
+  // the opening line. Running to EOF instead (the original behavior) had
+  // two bad consequences: parseEnvFile returned undefined for every key
+  // below it — so doctor would report set variables as missing, and the
+  // wizard would rotate a session secret it should have reused — and
+  // replacing such a key would have deleted every line beneath it from a
+  // file cimisy doesn't own.
+  return { raw: rawValue, endIndex: startIndex };
 }
 
 export function mergeEnvFile(existing: string, updates: Record<string, string>): EnvFileMergeResult {
   const added: string[] = [];
   const updated: string[] = [];
   const unchanged: string[] = [];
-  const pending = new Set(Object.keys(updates));
+  const removedDuplicates: string[] = [];
+  const targetKeys = new Set(Object.keys(updates));
+  // Distinct from targetKeys: which ones we've already written out. A key
+  // assigned twice in the same file must not be treated as two separate
+  // targets, or the second assignment survives untouched.
+  const written = new Set<string>();
 
   const lines = existing.split("\n");
   const output: string[] = [];
@@ -142,7 +155,7 @@ export function mergeEnvFile(existing: string, updates: Record<string, string>):
     const match = ASSIGNMENT_PATTERN.exec(line);
     const key = match?.[3];
 
-    if (!match || !key || !pending.has(key)) {
+    if (!match || !key || !targetKeys.has(key)) {
       output.push(line);
       continue;
     }
@@ -150,7 +163,20 @@ export function mergeEnvFile(existing: string, updates: Record<string, string>):
     const start = i;
     const span = readValueSpan(lines, start, match[4]!);
     i = span.endIndex;
-    pending.delete(key);
+
+    // A second assignment of a key we're setting. `.env` files are
+    // last-one-wins (dotenv parses top to bottom into an object), so
+    // leaving this would silently override everything written above it —
+    // the wizard would report success while the app kept loading the old
+    // credentials. Dropping lines from a file cimisy doesn't own is a
+    // strong move, so it's confined to exact duplicates of keys the
+    // caller is explicitly setting, and reported back for the CLI to say
+    // out loud.
+    if (written.has(key)) {
+      removedDuplicates.push(key);
+      continue;
+    }
+    written.add(key);
 
     const nextValue = updates[key]!;
     if (parseEnvValue(span.raw) === nextValue) {
@@ -167,7 +193,7 @@ export function mergeEnvFile(existing: string, updates: Record<string, string>):
 
   const appended: string[] = [];
   for (const key of Object.keys(updates)) {
-    if (!pending.has(key)) continue;
+    if (written.has(key)) continue;
     added.push(key);
     appended.push(`${key}=${formatEnvValue(updates[key]!)}`);
   }
@@ -180,7 +206,7 @@ export function mergeEnvFile(existing: string, updates: Record<string, string>):
     content += "\n";
   }
 
-  return { content, added, updated, unchanged };
+  return { content, added, updated, unchanged, removedDuplicates };
 }
 
 /**

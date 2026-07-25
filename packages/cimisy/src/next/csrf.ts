@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { ForbiddenError } from "../shared/errors.js";
+import { allowedOrigins } from "./public-origin.js";
 
 /**
  * CSRF protection for the admin API's state-changing routes.
@@ -19,11 +20,19 @@ import { ForbiddenError } from "../shared/errors.js";
  * attack technique trying to strip them.
  */
 export function requireSameOrigin(request: NextRequest): void {
-  const expectedOrigin = request.nextUrl.origin;
+  // Usually just the request's own origin. Behind a Host-rewriting proxy
+  // the server's view and the browser's differ, so a deployer-configured
+  // CIMISY_PUBLIC_URL is accepted as well — see next/public-origin.ts.
+  // Both values are trusted (one is where the request actually landed, the
+  // other is deployment configuration); no request header feeds this, so
+  // nothing an attacker controls widens the set.
+  const expected = allowedOrigins(request);
+  const describe = () => expected.map((origin) => `"${origin}"`).join(" or ");
+
   const origin = request.headers.get("origin");
   if (origin) {
-    if (origin !== expectedOrigin) {
-      throw new ForbiddenError(`Cross-origin request rejected (Origin "${origin}" does not match "${expectedOrigin}").`);
+    if (!expected.includes(origin)) {
+      throw new ForbiddenError(`Cross-origin request rejected (Origin "${origin}" does not match ${describe()}).`);
     }
     return;
   }
@@ -35,8 +44,8 @@ export function requireSameOrigin(request: NextRequest): void {
     } catch {
       throw new ForbiddenError("Cross-origin request rejected (unparseable Referer).");
     }
-    if (refererOrigin !== expectedOrigin) {
-      throw new ForbiddenError(`Cross-origin request rejected (Referer "${refererOrigin}" does not match "${expectedOrigin}").`);
+    if (!expected.includes(refererOrigin)) {
+      throw new ForbiddenError(`Cross-origin request rejected (Referer "${refererOrigin}" does not match ${describe()}).`);
     }
     return;
   }

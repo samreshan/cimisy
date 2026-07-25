@@ -1,6 +1,6 @@
 import { githubSource } from "../adapters/github/adapter.js";
 import { CimisyError } from "../shared/errors.js";
-import { missingGithubEnvMessage } from "../shared/github-env.js";
+import { missingGithubEnvMessage, REQUIRED_GITHUB_ENV_VARS, unconfiguredProductionMessage } from "../shared/github-env.js";
 import { localSource } from "../storage/local.js";
 import type { StorageAdapter } from "../storage/types.js";
 import { unconfiguredSource } from "../storage/unconfigured.js";
@@ -46,6 +46,16 @@ export interface ResolveSourceFromEnvOptions {
   onIncomplete?: "throw" | "placeholder";
 }
 
+/**
+ * Read from the injected env record rather than `process.env` directly, so
+ * a test can exercise the production path without mutating the real
+ * environment. Falls back to `process.env.NODE_ENV` because that's what
+ * the local adapter itself checks, and the two must agree.
+ */
+function isProductionEnv(env: EnvRecord): boolean {
+  return (env.NODE_ENV ?? process.env.NODE_ENV) === "production";
+}
+
 export function resolveSourceFromEnv(options: ResolveSourceFromEnvOptions): StorageAdapter {
   const env = options.env ?? process.env;
   const resolution = readSourceEnv(env);
@@ -53,6 +63,22 @@ export function resolveSourceFromEnv(options: ResolveSourceFromEnvOptions): Stor
   for (const warning of resolution.warnings) console.warn(`[cimisy] ${warning}`);
 
   if (resolution.mode === "local") {
+    // The single most common first-deploy state: someone pushes to a
+    // hosting platform before running `cimisy setup github`, so *no*
+    // cimisy variables are set at all. That resolves to "local", and the
+    // local adapter rightly refuses to run in production (no auth, direct
+    // disk writes) — but it does so by throwing at config import, which
+    // fails the whole build with a stack trace naming nothing actionable.
+    //
+    // Under "placeholder" that becomes the unconfigured source instead:
+    // the guard rail is untouched (the local adapter still never runs in
+    // production), but the deploy builds and /admin explains what to set.
+    // Note this is keyed on the *adapter's* own refusal condition, so it
+    // stays in step with storage/local.ts rather than second-guessing it.
+    if (options.onIncomplete === "placeholder" && isProductionEnv(env) && !resolution.allowInProduction) {
+      console.warn(`[cimisy] ${unconfiguredProductionMessage()}`);
+      return unconfiguredSource({ missing: REQUIRED_GITHUB_ENV_VARS });
+    }
     return localSource({ rootDir: options.contentDir, allowInProduction: resolution.allowInProduction });
   }
 

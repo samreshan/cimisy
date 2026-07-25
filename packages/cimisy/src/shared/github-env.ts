@@ -32,6 +32,8 @@ export const CIMISY_ENV_VARS = {
   branch: "CIMISY_GITHUB_BRANCH",
   sessionSecret: "CIMISY_SESSION_SECRET",
   allowLocalProd: "CIMISY_ALLOW_LOCAL_PROD",
+  /** Overrides the origin used for the OAuth callback and the CSRF check — see next/public-origin.ts. Deployment-specific, so it is deliberately NOT part of the CIMISY_CONFIG blob. */
+  publicUrl: "CIMISY_PUBLIC_URL",
   ...GITHUB_CREDENTIAL_ENV_VARS,
 } as const;
 
@@ -55,6 +57,24 @@ export function missingGithubCredentialsMessage(missing: GithubCredentialKey[]):
     `githubSource is missing credentials: ${missing.join(", ")}. ` +
     `If you wire these from env vars, make sure ${missing.map((k) => GITHUB_CREDENTIAL_ENV_VARS[k]).join(", ")} ` +
     `${missing.length === 1 ? "is" : "are"} set (e.g. in .env.local) — see the README's GitHub App setup walkthrough.`
+  );
+}
+
+/**
+ * The "nothing at all was configured, and this is production" case —
+ * distinct from "GitHub was selected but is incomplete", because the
+ * deployer didn't choose GitHub and half-fill it; they deployed before
+ * running setup. Saying "cimisy is configured for the GitHub source"
+ * there would be simply untrue and would send them looking for a variable
+ * they never set.
+ */
+export function unconfiguredProductionMessage(): string {
+  return (
+    "No content source is configured for production. The local adapter can't run with NODE_ENV=production " +
+    "(no authentication, direct disk writes) and no GitHub credentials were found. " +
+    'Run "npx cimisy setup github" locally, then set ' +
+    `${CIMISY_ENV_VARS.config} on your deployment and redeploy. ` +
+    "Serving the setup instructions page at /admin until then."
   );
 }
 
