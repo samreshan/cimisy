@@ -3,6 +3,7 @@ import type { Octokit } from "@octokit/rest";
 import { GithubAppAuth, type GithubAppCredentials } from "../../github/app-auth.js";
 import { CimisyError } from "../../shared/errors.js";
 import { CIMISY_ENV_VARS, GITHUB_CREDENTIAL_ENV_VARS, missingGithubCredentialsMessage, type GithubCredentialKey } from "../../shared/github-env.js";
+import { parseRepoSpec } from "../../shared/repo-spec.js";
 import { assertSafeRepoPath } from "../../shared/slug.js";
 import type {
   ChangeRequest,
@@ -26,11 +27,11 @@ export interface GithubSourceOptions extends GithubAppCredentials {
 }
 
 function parseRepo(repo: string): { owner: string; name: string } {
-  const match = /^(?<owner>[\w.-]+)\/(?<name>[\w.-]+)$/.exec(repo);
-  if (!match?.groups) {
+  const parsed = parseRepoSpec(repo);
+  if (!parsed) {
     throw new CimisyError(`githubSource repo must look like "owner/repo", got "${repo}".`, "INVALID_REPO");
   }
-  return { owner: match.groups.owner!, name: match.groups.name! };
+  return parsed;
 }
 
 /** Content API responses are base64 with embedded newlines; decode to the original utf-8 text. */

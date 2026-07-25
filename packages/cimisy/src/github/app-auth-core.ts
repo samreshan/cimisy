@@ -31,6 +31,8 @@ export interface RepoInstallation {
   id: number;
   /** Permissions actually granted to the installation, e.g. `{ contents: "write", pull_requests: "write" }`. */
   permissions: Record<string, string>;
+  /** Who the App is installed on — a user for a personal repo, an organization otherwise. */
+  account: { login: string; type: string } | null;
 }
 
 /** Subset of GitHub's App record — enough for `cimisy doctor` to prove the App JWT was accepted. */
@@ -103,7 +105,15 @@ export class GithubAppAuth {
     const appClient = await this.getAppClient();
     const { data } = await appClient.rest.apps.getRepoInstallation({ owner, repo });
     this.installationIdCache.set(`${owner}/${repo}`, data.id);
-    return { id: data.id, permissions: (data.permissions ?? {}) as Record<string, string> };
+    // `account` is a union of several actor shapes (and nullable) in the
+    // REST types; only login/type are ever read, and both are optional
+    // across that union.
+    const account = data.account as { login?: string; type?: string } | null | undefined;
+    return {
+      id: data.id,
+      permissions: (data.permissions ?? {}) as Record<string, string>,
+      account: account?.login ? { login: account.login, type: account.type ?? "" } : null,
+    };
   }
 
   private async resolveInstallationId(owner: string, repo: string): Promise<number> {
