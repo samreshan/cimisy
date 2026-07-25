@@ -5,8 +5,10 @@ import { DEFAULT_ROLE_MAPPING } from "../config/define-config.js";
 import { buildAuthorizeUrl, exchangeCodeForIdentity } from "../github/oauth.js";
 import { ensureUserRecord } from "../rbac/user-store.js";
 import { clientIpFromRequest, type RateLimiter } from "../security/rate-limit.js";
+import { AUTH_CALLBACK_PATH } from "../shared/auth-callback-path.js";
 import type { GithubIntegratedSource } from "../shared/github-source-shape.js";
 import { DEFAULT_REF } from "./actor.js";
+import { resolvePublicOrigin } from "./public-origin.js";
 import {
   OAUTH_STATE_COOKIE_NAME,
   OAUTH_STATE_COOKIE_OPTIONS,
@@ -36,7 +38,11 @@ export async function handleLogin(
   }
 
   const state = generateOauthState();
-  const redirectUri = new URL("/api/cimisy/auth/callback", request.nextUrl.origin).toString();
+  // The public origin, not the one the server happened to see: on a Vercel
+  // preview (unique hostname) or behind a Host-rewriting proxy, the
+  // request-derived value produces a redirect_uri that isn't registered on
+  // the App, and GitHub rejects the sign-in outright.
+  const redirectUri = new URL(AUTH_CALLBACK_PATH, resolvePublicOrigin(request)).toString();
   const authorizeUrl = buildAuthorizeUrl({ clientId: source.credentials.clientId, redirectUri, state });
   const response = NextResponse.redirect(authorizeUrl);
   response.cookies.set(OAUTH_STATE_COOKIE_NAME, state, OAUTH_STATE_COOKIE_OPTIONS);
@@ -71,7 +77,9 @@ export async function handleCallback(
     return NextResponse.json({ error: "Invalid OAuth state." }, { status: 400 });
   }
 
-  const redirectUri = new URL("/api/cimisy/auth/callback", request.nextUrl.origin).toString();
+  // Must be byte-identical to the redirect_uri sent to /authorize — GitHub
+  // compares them during the code exchange.
+  const redirectUri = new URL(AUTH_CALLBACK_PATH, resolvePublicOrigin(request)).toString();
   let identity;
   try {
     identity = await exchangeCodeForIdentity({
@@ -100,7 +108,7 @@ export async function handleCallback(
     source.sessionSecret,
   );
 
-  const response = NextResponse.redirect(new URL(DEFAULT_POST_LOGIN_REDIRECT, request.nextUrl.origin));
+  const response = NextResponse.redirect(new URL(DEFAULT_POST_LOGIN_REDIRECT, resolvePublicOrigin(request)));
   response.cookies.set(SESSION_COOKIE_NAME, sessionToken, SESSION_COOKIE_OPTIONS);
   response.cookies.delete(OAUTH_STATE_COOKIE_NAME);
   return response;

@@ -54,6 +54,20 @@ describe("detectSource", () => {
     expect(detectSource(configText, "/project/cimisy.config.js")).toEqual({ kind: "local", rootDir: "./content" });
   });
 
+  // What `cimisy setup` scaffolds. It resolves to the local adapter under
+  // the CLI's own environment, which is what the import codemod needs to
+  // know — but it's flagged env-driven so anything reporting to a human
+  // doesn't claim the deployed config is local.
+  it("treats resolveSourceFromEnv({ contentDir }) as local, marked env-driven", () => {
+    const configText = `
+      export default config({
+        source: resolveSourceFromEnv({ contentDir: "./content", onIncomplete: "placeholder" }),
+        collections: {},
+      });
+    `;
+    expect(detectSource(configText, "/project/cimisy.config.ts")).toEqual({ kind: "local", rootDir: "./content", envDriven: true });
+  });
+
   describe("the README's NODE_ENV-based local/github switch", () => {
     const configText = `
       const source =

@@ -8,3 +8,5 @@ export type {
   OpenChangeRequestInput,
   StorageAdapter,
 } from "./types.js";
+export { isUnconfiguredSource, unconfiguredSource, UnconfiguredStorageAdapter } from "./unconfigured.js";
+export type { UnconfiguredSource, UnconfiguredSourceOptions } from "./unconfigured.js";

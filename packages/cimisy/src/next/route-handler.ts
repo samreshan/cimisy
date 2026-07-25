@@ -20,6 +20,7 @@ import { assertSafeContentKey, draftBranchName, parseDraftBranchName, SINGLETON_
 import { CimisyError, ConflictError, ForbiddenError, NotFoundError, RateLimitedError, ValidationError } from "../shared/errors.js";
 import { isGithubSource } from "../shared/github-source-shape.js";
 import { assertSafeRepoPath, assertSafeSlug, entryPathForSlug } from "../shared/slug.js";
+import { isUnconfiguredSource } from "../storage/unconfigured.js";
 import type { Actor } from "./actor.js";
 import { DEFAULT_REF, resolveActor } from "./actor.js";
 import { handleCallback, handleLogin, handleLogout } from "./auth-routes.js";
@@ -993,6 +994,25 @@ export function createCimisyHandler(cimisyConfig: ResolvedCimisyConfig) {
   // that value), so this still works at runtime under Next 14, which
   // passes `params` synchronously.
   type RouteParams = Promise<{ route: string[] }>;
+
+  // A deploy whose GitHub variables never made it into the environment
+  // (see storage/unconfigured.ts). Every route answers 503 with the
+  // missing variable *names* — never values, and never a stack trace —
+  // rather than letting each handler discover the same problem separately
+  // and report it as a 500.
+  if (isUnconfiguredSource(cimisyConfig.source)) {
+    const missing = [...cimisyConfig.source.missing];
+    const unconfigured = async (_request: NextRequest, _context: { params: RouteParams }) =>
+      NextResponse.json(
+        {
+          error: "cimisy is not configured",
+          missing,
+          hint: 'Run "npx cimisy setup github" locally, then set CIMISY_CONFIG on this deployment and redeploy.',
+        },
+        { status: 503 },
+      );
+    return { GET: unconfigured, POST: unconfigured, PUT: unconfigured, DELETE: unconfigured };
+  }
 
   return {
     GET: async (request: NextRequest, context: { params: RouteParams }) => {

@@ -3,7 +3,11 @@ import path from "node:path";
 import ts from "typescript";
 import { isScanMode, type ScanMode } from "./modes.js";
 
-export type SourceDetection = { kind: "local"; rootDir: string } | { kind: "github" } | { kind: "unknown" };
+export type SourceDetection =
+  /** `envDriven` marks a `resolveSourceFromEnv({ contentDir })` config: it resolves to the local adapter rooted at `rootDir` under the CLI's own environment (which is what the import codemod needs), but the deployed adapter is whatever the environment selects. Callers that report to a human should say so rather than claiming the config is local. */
+  | { kind: "local"; rootDir: string; envDriven?: boolean }
+  | { kind: "github" }
+  | { kind: "unknown" };
 
 /** `process.env.NODE_ENV` accessed via plain dot notation — the only shape the README's own recommended switch uses. */
 function isNodeEnvAccess(node: ts.Expression): boolean {
@@ -76,15 +80,27 @@ export function detectSource(configText: string, configFilePath: string): Source
         detection = { kind: "github" };
         return;
       }
-      if (node.expression.text === "localSource" && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
+      // `resolveSourceFromEnv({ contentDir })` (cimisy/env, what `cimisy
+      // setup` scaffolds) resolves to the local adapter rooted at
+      // contentDir whenever CIMISY_SOURCE/CIMISY_CONFIG aren't set — which
+      // is exactly the situation the CLI runs in. Treated as local for the
+      // same reason the NODE_ENV ternary is: only the branch that would
+      // actually run here is inspected.
+      const dirOption = node.expression.text === "localSource" ? "rootDir" : node.expression.text === "resolveSourceFromEnv" ? "contentDir" : null;
+      if (dirOption && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
         for (const prop of node.arguments[0].properties) {
           if (
             ts.isPropertyAssignment(prop) &&
             ts.isIdentifier(prop.name) &&
-            prop.name.text === "rootDir" &&
+            prop.name.text === dirOption &&
             ts.isStringLiteralLike(prop.initializer)
           ) {
-            detection = { kind: "local", rootDir: prop.initializer.text };
+            // Only set when true, so a plain localSource detection keeps
+            // the exact shape callers have always compared against.
+            detection =
+              dirOption === "contentDir"
+                ? { kind: "local", rootDir: prop.initializer.text, envDriven: true }
+                : { kind: "local", rootDir: prop.initializer.text };
           }
         }
         return;

@@ -209,14 +209,30 @@ export function insertCollectionIntoConfig(sourceText: string, options: InsertCo
   return insertObjectLiteralProperty(withImports, source, collectionsObj, (indent) => buildCollectionSourceText(options, indent));
 }
 
-/** A fresh cimisy.config.ts matching the README quickstart shape, with an empty collections object ready for insertCollectionIntoConfig. */
+/**
+ * A fresh cimisy.config.ts matching the README quickstart shape, with an
+ * empty collections object ready for insertCollectionIntoConfig.
+ *
+ * Scaffolds `resolveSourceFromEnv` rather than a bare `localSource` so a
+ * project is deploy-ready from day one: the same file works in dev (local
+ * disk) and in production (GitHub) with no edit — the switch is
+ * `CIMISY_SOURCE`/`CIMISY_CONFIG` in the environment. `cimisy scan`'s
+ * static source detection understands this call shape too (see
+ * scan/config-detection.ts's detectSource), so `cimisy import` still knows
+ * where content lives.
+ */
 export function scaffoldConfigFile(): string {
   return [
     `import { collection, config, fields } from "cimisy/config";`,
-    `import { localSource } from "cimisy/adapters/local";`,
+    `import { resolveSourceFromEnv } from "cimisy/env";`,
     ``,
     `export default config({`,
-    `  source: localSource({ rootDir: "./content" }),`,
+    `  // Local disk in dev; the GitHub adapter once CIMISY_CONFIG (or`,
+    `  // CIMISY_SOURCE=github + the individual vars) is set — run`,
+    `  // "npx cimisy setup github" to create the GitHub App and fill those in.`,
+    `  // onIncomplete: "placeholder" means a deploy that's missing those vars`,
+    `  // still builds and explains itself at /admin instead of failing the build.`,
+    `  source: resolveSourceFromEnv({ contentDir: "./content", onIncomplete: "placeholder" }),`,
     ``,
     `  collections: {},`,
     `});`,

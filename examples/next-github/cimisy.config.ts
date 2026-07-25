@@ -1,17 +1,17 @@
 import { blocks, collection, config, fields, singleton } from "cimisy/config";
-import { githubSource } from "cimisy/adapters/github";
+import { resolveSourceFromEnv } from "cimisy/env";
 import { seoSettingsFields } from "cimisy/seo";
 
 export default config({
-  source: githubSource({
-    repo: process.env.CIMISY_GITHUB_REPO!, // "owner/repo"
-    branch: process.env.CIMISY_GITHUB_BRANCH ?? "main",
-    appId: process.env.CIMISY_GITHUB_APP_ID!,
-    privateKey: process.env.CIMISY_GITHUB_APP_PRIVATE_KEY!,
-    clientId: process.env.CIMISY_GITHUB_APP_CLIENT_ID!,
-    clientSecret: process.env.CIMISY_GITHUB_APP_CLIENT_SECRET!,
-    sessionSecret: process.env.CIMISY_SESSION_SECRET!,
-  }),
+  // One call instead of a hand-written env switch. Reads CIMISY_CONFIG (the
+  // single variable `npx cimisy setup github` prints) or the individual
+  // CIMISY_GITHUB_* vars, and falls back to the local adapter when neither
+  // is set — so this same file runs in dev with no credentials at all.
+  //
+  // onIncomplete: "placeholder" means a deploy that's missing some of those
+  // vars still builds, answers 503 from the API, and explains itself at
+  // /admin — instead of failing the build with a stack trace.
+  source: resolveSourceFromEnv({ contentDir: "./content", onIncomplete: "placeholder" }),
 
   collections: {
     posts: collection({

@@ -1,4 +1,8 @@
-# cimisy
+<p align="center">
+  <img src="https://raw.githubusercontent.com/samreshan/cimisy/main/assets/cimisy-logo.png" alt="cimisy" height="56">
+</p>
+
+<p align="center"><strong>The CMS that moves into your repo.</strong></p>
 
 A git-based, security-first CMS that installs directly into an existing Next.js app — no separate server, no hosted database. Content is plain MDX + YAML frontmatter, versioned in your own repo.
 
@@ -18,14 +22,16 @@ pnpm --filter next-local dev
 
 Then open `http://localhost:3000/admin` for the editor, or `http://localhost:3000/blog` for the public site rendered via the Reader API.
 
-**GitHub adapter (requires registering your own GitHub App — see `examples/next-github/README.md` or [the package README's setup guide](./packages/cimisy/README.md#setting-up-a-github-app)):**
+**GitHub adapter** — needs a GitHub App of your own (cimisy never runs a shared one). `cimisy setup github` registers it for you: one browser confirmation, and it writes `.env.local` itself. See [`examples/next-github/README.md`](./examples/next-github/README.md) or [the package README](./packages/cimisy/README.md#going-to-production-github).
 
 ```sh
 pnpm install
 pnpm --filter cimisy build
-cp examples/next-github/.env.local.example examples/next-github/.env.local  # fill in your App's credentials
+cd examples/next-github && node ../../packages/cimisy/dist/cli/index.js setup github && cd ../..
 pnpm --filter next-github dev
 ```
+
+Doing it by hand instead? `cp examples/next-github/.env.local.example examples/next-github/.env.local` and fill it in, then `node packages/cimisy/dist/cli/index.js doctor` from that directory to check it.
 
 ## Packages
 

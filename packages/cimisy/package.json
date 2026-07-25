@@ -42,6 +42,10 @@
       "types": "./dist/storage/index.d.ts",
       "import": "./dist/storage/index.js"
     },
+    "./env": {
+      "types": "./dist/env/index.d.ts",
+      "import": "./dist/env/index.js"
+    },
     "./adapters/local": {
       "types": "./dist/storage/local.d.ts",
       "import": "./dist/storage/local.js"

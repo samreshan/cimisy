@@ -2,6 +2,8 @@ import "server-only";
 import type { Octokit } from "@octokit/rest";
 import { GithubAppAuth, type GithubAppCredentials } from "../../github/app-auth.js";
 import { CimisyError } from "../../shared/errors.js";
+import { CIMISY_ENV_VARS, GITHUB_CREDENTIAL_ENV_VARS, missingGithubCredentialsMessage, type GithubCredentialKey } from "../../shared/github-env.js";
+import { parseRepoSpec } from "../../shared/repo-spec.js";
 import { assertSafeRepoPath } from "../../shared/slug.js";
 import type {
   ChangeRequest,
@@ -25,11 +27,11 @@ export interface GithubSourceOptions extends GithubAppCredentials {
 }
 
 function parseRepo(repo: string): { owner: string; name: string } {
-  const match = /^(?<owner>[\w.-]+)\/(?<name>[\w.-]+)$/.exec(repo);
-  if (!match?.groups) {
+  const parsed = parseRepoSpec(repo);
+  if (!parsed) {
     throw new CimisyError(`githubSource repo must look like "owner/repo", got "${repo}".`, "INVALID_REPO");
   }
-  return { owner: match.groups.owner!, name: match.groups.name! };
+  return parsed;
 }
 
 /** Content API responses are base64 with embedded newlines; decode to the original utf-8 text. */
@@ -54,24 +56,13 @@ export class GithubStorageAdapter implements StorageAdapter {
     // later as an opaque 500 from the GitHub client mid-request.
     if (!options.repo) {
       throw new CimisyError(
-        'githubSource is missing "repo" — usually wired from the CIMISY_GITHUB_REPO env var (e.g. in .env.local). Expected "owner/repo".',
+        `githubSource is missing "repo" — usually wired from the ${CIMISY_ENV_VARS.repo} env var (e.g. in .env.local). Expected "owner/repo".`,
         "MISSING_GITHUB_CONFIG",
       );
     }
-    const credentialEnvVars = {
-      appId: "CIMISY_GITHUB_APP_ID",
-      privateKey: "CIMISY_GITHUB_APP_PRIVATE_KEY",
-      clientId: "CIMISY_GITHUB_APP_CLIENT_ID",
-      clientSecret: "CIMISY_GITHUB_APP_CLIENT_SECRET",
-    } as const;
-    const missing = (Object.keys(credentialEnvVars) as Array<keyof typeof credentialEnvVars>).filter((key) => !options[key]);
+    const missing = (Object.keys(GITHUB_CREDENTIAL_ENV_VARS) as GithubCredentialKey[]).filter((key) => !options[key]);
     if (missing.length > 0) {
-      throw new CimisyError(
-        `githubSource is missing credentials: ${missing.join(", ")}. ` +
-          `If you wire these from env vars, make sure ${missing.map((k) => credentialEnvVars[k]).join(", ")} ` +
-          `${missing.length === 1 ? "is" : "are"} set (e.g. in .env.local) — see the README's GitHub App setup walkthrough.`,
-        "MISSING_GITHUB_CONFIG",
-      );
+      throw new CimisyError(missingGithubCredentialsMessage(missing), "MISSING_GITHUB_CONFIG");
     }
     if (!options.sessionSecret || options.sessionSecret.length < 32) {
       throw new CimisyError(

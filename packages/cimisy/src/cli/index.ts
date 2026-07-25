@@ -12,6 +12,8 @@ import { resolveConfigFilePath, type ScanConfigDetection } from "../scan/config-
 import { createImportBranch, DIRTY_TREE_MESSAGE, isGitRepo, isWorkingTreeClean, NOT_A_GIT_REPO_MESSAGE } from "../scan/git.js";
 import { DEFAULT_SCAN_MODE, isScanMode, SCAN_MODES, type ScanMode } from "../scan/modes.js";
 import { readScanConfig, runProjectScan } from "../scan/run-project-scan.js";
+import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
+import { runSetupGithubCommand } from "./setup-github.js";
 import { isProjectSetUp, setupProject } from "./setup-project.js";
 import {
   defaultReportPath,
@@ -251,7 +253,17 @@ async function runImportCommand(projectRoot: string, args: string[]): Promise<vo
   clack.outro(`Done. Review the changes with "git diff" on branch ${branch}, then commit when you're happy with them.${setupHint}`);
 }
 
-async function runSetupCommand(projectRoot: string): Promise<void> {
+/** `cimisy setup` scaffolds the project files; `cimisy setup github` runs the GitHub App wizard. Anything else after `setup` is a usage error rather than a silently-ignored argument. */
+async function runSetupCommand(projectRoot: string, args: string[]): Promise<void> {
+  const target = args.find((arg) => !arg.startsWith("-"));
+  if (target === "github") {
+    await runSetupGithubCommand({ projectRoot });
+    return;
+  }
+  if (target !== undefined) {
+    throw new CliUsageError(`Unknown setup target "${target}". Expected "cimisy setup" or "cimisy setup github".`);
+  }
+
   clack.intro("cimisy setup");
   let result;
   try {
@@ -270,6 +282,19 @@ async function runSetupCommand(projectRoot: string): Promise<void> {
     `Done. Start your dev server and open /admin. ` +
       `For production, switch the config's source to githubSource — see the cimisy README's "Using the GitHub adapter" section.`,
   );
+}
+
+async function runDoctorCommand(projectRoot: string, args: string[]): Promise<void> {
+  const json = args.includes("--json");
+  const report = await runDoctor({ projectRoot });
+
+  if (json) {
+    // Machine-readable to stdout, nothing else — same contract as `cimisy scan --json`.
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(formatDoctorReport(report));
+  }
+  process.exitCode = doctorExitCode(report);
 }
 
 function printUsage(): void {
@@ -297,6 +322,13 @@ function printUsage(): void {
       "           --allow-dirty  skip the clean-git-working-tree check",
       "  setup    Scaffold cimisy.config (if missing), the admin UI page, and the API route;",
       "           never overwrites existing files — safe to re-run",
+      "  setup github",
+      "           Register a GitHub App for production via GitHub's App Manifest flow:",
+      "           one browser confirmation, writes .env.local, installs the App, and prints",
+      "           a single CIMISY_CONFIG variable to paste into your deployment platform",
+      "  doctor   Verify the configuration: env vars, GitHub App auth, installation,",
+      "           repo permissions, and project wiring. Exits 1 if any check fails",
+      "           --json         print the machine-readable report to stdout",
       "",
     ].join("\n"),
   );
@@ -314,7 +346,10 @@ async function main(): Promise<void> {
       await runImportCommand(projectRoot, rest);
       return;
     case "setup":
-      await runSetupCommand(projectRoot);
+      await runSetupCommand(projectRoot, rest);
+      return;
+    case "doctor":
+      await runDoctorCommand(projectRoot, rest);
       return;
     case undefined:
     case "help":

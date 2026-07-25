@@ -6,48 +6,27 @@ Demonstrates cimisy's GitHub-backed storage adapter, GitHub App authentication, 
 
 Use a repo you don't mind experimenting on. It needs at least one commit (an empty repo has no `main` branch/ref for the adapter to read).
 
-## 2. Register a GitHub App
+## 2. Run the setup wizard
 
-Go to **github.com → Settings → Developer settings → GitHub Apps → New GitHub App** (org-owned repos: use the org's settings instead of your personal ones).
-
-- **GitHub App name**: anything unique, e.g. `cimisy-dev-yourname`
-- **Homepage URL**: `http://localhost:3000`
-- **Callback URL**: `http://localhost:3000/api/cimisy/auth/callback`
-- **Webhook**: uncheck "Active" — not used until a later milestone
-- **Repository permissions**:
-  - Contents: **Read and write**
-  - Pull requests: **Read and write**
-  - Metadata: Read-only (checked automatically)
-- **Where can this GitHub App be installed?**: "Only on this account" is simplest for local dev
-
-Click **Create GitHub App**.
-
-## 3. Collect credentials
-
-On the App's settings page:
-
-- **App ID** → `CIMISY_GITHUB_APP_ID`
-- **Client ID** → `CIMISY_GITHUB_APP_CLIENT_ID`
-- Under "Client secrets" → **Generate a new client secret** → `CIMISY_GITHUB_APP_CLIENT_SECRET`
-- Under "Private keys" → **Generate a private key** → downloads a `.pem` file → paste its full contents into `CIMISY_GITHUB_APP_PRIVATE_KEY`
-
-## 4. Install the App on your test repo
-
-From the App's settings page, click **Install App** in the left sidebar, and select the repo from step 1.
-
-## 5. Configure this example
+From this directory:
 
 ```sh
-cp .env.local.example .env.local
+npx cimisy setup github
 ```
 
-Fill in the values from steps 1–4, plus a session secret:
+It asks for the repo from step 1 (and a production URL, which you can leave blank for local-only), opens your browser once to confirm a pre-filled GitHub App, then registers it, waits for you to install it on the repo, and writes `.env.local` itself — App id, private key, client id and secret, plus a freshly generated session secret. It finishes with a `cimisy doctor` checklist.
+
+That's the whole of steps 2–5 of the old manual walkthrough. If you'd rather do it by hand — or the wizard can't open a browser on this machine — see [the package README's "Registering the App by hand" appendix](../../packages/cimisy/README.md#appendix-registering-the-app-by-hand), then `cp .env.local.example .env.local` and fill it in.
+
+## 3. Check it
 
 ```sh
-openssl rand -base64 32
+npx cimisy doctor
 ```
 
-## 6. Run it
+Prints a pass/fail line per check: env vars present, private key parses, App credentials accepted, App installed on the repo, Contents/Pull-requests permissions actually granted, branch exists, collaborator lookup works, routes mounted. Exits non-zero if anything failed, so it's usable in CI too.
+
+## 4. Run it
 
 From the repo root:
 
@@ -62,7 +41,7 @@ Open `http://localhost:3000/admin`, sign in with GitHub, and create a post.
 What happens next depends on your GitHub collaborator permission level on the test repo (cimisy's default role mapping — see `cimisy.config.ts`'s comment for how to customize it):
 
 - **Admin/Maintain** collaborators: the save lands as a real commit directly on the default branch — check `git log`/GitHub's commit history to confirm.
-- **Write**-level collaborators: the save opens (or updates) a pull request on a branch named `cimisy/<your-username>/posts/<slug>` instead — the admin UI shows a link to it after saving. The default branch is untouched until someone with merge rights merges the PR through GitHub's own UI; cimisy doesn't add its own merge/approve button by design (see the plan's RBAC notes — it leans on GitHub's branch protection instead of reimplementing review).
+- **Write**-level collaborators: the save opens (or updates) a pull request on a branch named `cimisy/<your-username>/posts/<slug>` instead — the admin UI shows a link to it after saving. The default branch is untouched until the PR is merged: from the **Drafts** screen, anyone whose role is permitted to merge (server-decided, same RBAC path-glob rules as writes) sees an **Approve & merge** button that merges the PR directly through the GitHub adapter — no need to leave the admin UI, though merging straight from GitHub's own PR page works too.
 - **Read/Triage**-level collaborators: read-only — writes are rejected with a 403.
 - Non-collaborators on the repo: rejected with a 403 even though they're a valid GitHub identity (sign-in alone isn't enough; you also need to actually be added as a collaborator on the test repo).
 
