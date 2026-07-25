@@ -76,12 +76,19 @@ export function detectSource(configText: string, configFilePath: string): Source
         detection = { kind: "github" };
         return;
       }
-      if (node.expression.text === "localSource" && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
+      // `resolveSourceFromEnv({ contentDir })` (cimisy/env, what `cimisy
+      // setup` scaffolds) resolves to the local adapter rooted at
+      // contentDir whenever CIMISY_SOURCE/CIMISY_CONFIG aren't set — which
+      // is exactly the situation the CLI runs in. Treated as local for the
+      // same reason the NODE_ENV ternary is: only the branch that would
+      // actually run here is inspected.
+      const dirOption = node.expression.text === "localSource" ? "rootDir" : node.expression.text === "resolveSourceFromEnv" ? "contentDir" : null;
+      if (dirOption && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
         for (const prop of node.arguments[0].properties) {
           if (
             ts.isPropertyAssignment(prop) &&
             ts.isIdentifier(prop.name) &&
-            prop.name.text === "rootDir" &&
+            prop.name.text === dirOption &&
             ts.isStringLiteralLike(prop.initializer)
           ) {
             detection = { kind: "local", rootDir: prop.initializer.text };

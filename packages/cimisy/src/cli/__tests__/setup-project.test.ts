@@ -52,7 +52,7 @@ describe("setupProject", () => {
     assertNoSyntaxErrors(route);
 
     const config = await readFile(path.join(root, "cimisy.config.ts"), "utf8");
-    expect(config).toContain("localSource");
+    expect(config).toContain("resolveSourceFromEnv");
     assertNoSyntaxErrors(config);
 
     expect(await isProjectSetUp(root)).toBe(true);
