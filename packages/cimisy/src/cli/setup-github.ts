@@ -8,6 +8,7 @@ import { GithubAppAuth } from "../github/app-auth-core.js";
 import { CIMISY_ENV_VARS } from "../shared/github-env.js";
 import { parseRepoSpec } from "../shared/repo-spec.js";
 import { pathExists } from "../scan/config-detection.js";
+import { formatDoctorReport, loadProjectEnv, runDoctor } from "./doctor.js";
 import { gitignoreCoversEnvLocal, mergeEnvFile, parseEnvFile } from "./env-file.js";
 import { buildAppManifest, manifestRegistrationUrl, suggestAppName, MAX_APP_NAME_LENGTH } from "./manifest.js";
 import { exchangeManifestCode, startManifestCallbackServer, type ManifestConversion } from "./manifest-flow.js";
@@ -364,6 +365,22 @@ export async function runSetupGithubCommand(options: SetupGithubOptions): Promis
   clack.log.info(
     `Then redeploy (env vars only take effect on a new build) and sign in at ${productionOrigin ? `${productionOrigin}/admin` : "<your-url>/admin"}.`,
   );
+
+  // ── 8. Doctor finale ──────────────────────────────────────────────────
+  // The same checks and the same format `npx cimisy doctor` prints, so
+  // there's exactly one answer to "is this configured correctly?".
+  spinner.start("Verifying the setup");
+  const report = await runDoctor({ projectRoot, env: await loadProjectEnv(projectRoot) });
+  spinner.stop(report.ok ? "Verified" : "Verification found problems");
+  console.log("");
+  console.log(formatDoctorReport(report));
+  console.log("");
+
+  if (!report.ok) {
+    clack.outro(`Some checks failed — fix them and re-run "npx cimisy doctor".`);
+    process.exitCode = 1;
+    return;
+  }
 
   clack.outro(`Done. Locally: start your dev server and open http://localhost:3000/admin.`);
 }

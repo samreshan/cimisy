@@ -12,6 +12,7 @@ import { resolveConfigFilePath, type ScanConfigDetection } from "../scan/config-
 import { createImportBranch, DIRTY_TREE_MESSAGE, isGitRepo, isWorkingTreeClean, NOT_A_GIT_REPO_MESSAGE } from "../scan/git.js";
 import { DEFAULT_SCAN_MODE, isScanMode, SCAN_MODES, type ScanMode } from "../scan/modes.js";
 import { readScanConfig, runProjectScan } from "../scan/run-project-scan.js";
+import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { runSetupGithubCommand } from "./setup-github.js";
 import { isProjectSetUp, setupProject } from "./setup-project.js";
 import {
@@ -283,6 +284,19 @@ async function runSetupCommand(projectRoot: string, args: string[]): Promise<voi
   );
 }
 
+async function runDoctorCommand(projectRoot: string, args: string[]): Promise<void> {
+  const json = args.includes("--json");
+  const report = await runDoctor({ projectRoot });
+
+  if (json) {
+    // Machine-readable to stdout, nothing else — same contract as `cimisy scan --json`.
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(formatDoctorReport(report));
+  }
+  process.exitCode = doctorExitCode(report);
+}
+
 function printUsage(): void {
   console.log(
     [
@@ -312,6 +326,9 @@ function printUsage(): void {
       "           Register a GitHub App for production via GitHub's App Manifest flow:",
       "           one browser confirmation, writes .env.local, installs the App, and prints",
       "           a single CIMISY_CONFIG variable to paste into your deployment platform",
+      "  doctor   Verify the configuration: env vars, GitHub App auth, installation,",
+      "           repo permissions, and project wiring. Exits 1 if any check fails",
+      "           --json         print the machine-readable report to stdout",
       "",
     ].join("\n"),
   );
@@ -330,6 +347,9 @@ async function main(): Promise<void> {
       return;
     case "setup":
       await runSetupCommand(projectRoot, rest);
+      return;
+    case "doctor":
+      await runDoctorCommand(projectRoot, rest);
       return;
     case undefined:
     case "help":
