@@ -60,12 +60,52 @@ export function isValidProductionOrigin(value: string): boolean {
   }
 }
 
-/** Opens a URL in the platform browser, best-effort — the wizard always prints it too, so a failure here is not an error. */
-function openBrowser(url: string): void {
-  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+/**
+ * The only two URLs this wizard ever opens: its own loopback callback
+ * server, and the App's install page on github.com. Anything else is a
+ * bug or a tampered API response, and gets refused rather than launched.
+ *
+ * This matters because the install URL embeds a slug that comes back from
+ * GitHub's API — and the threat model's stance on GitHub is "a trusted
+ * third party, but not blindly". Handing a remotely-influenced string to
+ * a process launcher on the strength of someone else's sanitization is
+ * exactly the bet not to take.
+ */
+export function isOpenableUrl(url: string): boolean {
+  let parsed: URL;
   try {
-    const child = spawn(command, args, { stdio: "ignore", detached: true });
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === "https:") return parsed.hostname === "github.com";
+  // The wizard's own temp server, which only ever binds loopback.
+  if (parsed.protocol === "http:") return parsed.hostname === "127.0.0.1";
+  return false;
+}
+
+/**
+ * Opens a URL in the platform browser, best-effort — the wizard always
+ * prints it too, so refusing or failing here costs the user nothing.
+ *
+ * Windows goes through rundll32's FileProtocolHandler rather than
+ * `cmd /c start`: `cmd` parses its own command line, so a `&` or `|`
+ * surviving into the URL would be command injection, whereas rundll32
+ * takes it as a plain argv element. `spawn` is never given `shell: true`
+ * on any platform, so no other path reaches a shell either.
+ */
+function openBrowser(url: string): void {
+  if (!isOpenableUrl(url)) return;
+
+  const [command, args] =
+    process.platform === "darwin"
+      ? (["open", [url]] as const)
+      : process.platform === "win32"
+        ? (["rundll32", ["url.dll,FileProtocolHandler", url]] as const)
+        : (["xdg-open", [url]] as const);
+
+  try {
+    const child = spawn(command, [...args], { stdio: "ignore", detached: true, shell: false });
     child.on("error", () => {});
     child.unref();
   } catch {
@@ -296,7 +336,10 @@ export async function runSetupGithubCommand(options: SetupGithubOptions): Promis
   }
 
   // ── 6. Install the App on the repo ────────────────────────────────────
-  const installUrl = `https://github.com/apps/${conversion.slug}/installations/new`;
+  // encodeURIComponent, not raw interpolation: the slug is GitHub's, and a
+  // path segment built from a remote value is where a `..` or a stray
+  // separator would otherwise change which URL this resolves to.
+  const installUrl = `https://github.com/apps/${encodeURIComponent(conversion.slug)}/installations/new`;
   clack.log.step(`Now install the App on ${repo}:\n  ${installUrl}`);
   openBrowser(installUrl);
 

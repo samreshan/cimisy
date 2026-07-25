@@ -12,4 +12,6 @@ Fixes for deploying to Vercel (and anything behind a proxy), plus two `.env.loca
 
 **An unterminated quote in `.env.local` no longer hides every variable below it.** The parser treated the value as running to end-of-file, so `cimisy doctor` reported set variables as missing and the wizard rotated a session secret it should have reused (logging everyone out). Replacing such a key would also have deleted the lines beneath it.
 
+**Hardened the wizard's browser-opening step.** The App install URL embeds a slug returned by GitHub's API and was passed to a process launcher — on Windows via `cmd /c start`, which parses its own command line, so a shell metacharacter surviving into that slug would have been command injection. The URL is now checked against an allowlist (only `https://github.com` and the wizard's own `http://127.0.0.1` server), the slug is percent-encoded, and Windows uses `rundll32 url.dll,FileProtocolHandler`, which takes the URL as a plain argument with no shell involved. Found by CodeQL.
+
 The README's Vercel guide is rewritten around the two-command path, with a troubleshooting table, preview-deployment behavior, and a note that the GitHub App must be owned by the same account as the content repo.
