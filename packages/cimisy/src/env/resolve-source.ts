@@ -3,6 +3,7 @@ import { CimisyError } from "../shared/errors.js";
 import { missingGithubEnvMessage } from "../shared/github-env.js";
 import { localSource } from "../storage/local.js";
 import type { StorageAdapter } from "../storage/types.js";
+import { unconfiguredSource } from "../storage/unconfigured.js";
 import { readSourceEnv, type EnvRecord } from "./read-env.js";
 
 /**
@@ -25,6 +26,24 @@ export interface ResolveSourceFromEnvOptions {
   contentDir: string;
   /** Defaults to `process.env`. Injectable so tests never mutate the real environment. */
   env?: EnvRecord;
+  /**
+   * What to do when the GitHub source is selected but some of its
+   * variables are missing.
+   *
+   * `"throw"` (default) preserves the historical fail-fast behavior: the
+   * config file throws at import, which in Next.js fails the build.
+   *
+   * `"placeholder"` returns an `unconfigured` source instead — the app
+   * builds, the API answers 503 naming the missing variables, and `/admin`
+   * renders instructions. This is what `cimisy setup` scaffolds, because
+   * the person who hits this state is usually mid-deploy and needs to be
+   * told what's missing, not handed a stack trace.
+   *
+   * A *malformed* `CIMISY_CONFIG` throws under either setting — corrupt is
+   * not the same as incomplete, and silently degrading it would hide a
+   * config that someone believes is set.
+   */
+  onIncomplete?: "throw" | "placeholder";
 }
 
 export function resolveSourceFromEnv(options: ResolveSourceFromEnvOptions): StorageAdapter {
@@ -38,6 +57,10 @@ export function resolveSourceFromEnv(options: ResolveSourceFromEnvOptions): Stor
   }
 
   if (!resolution.options) {
+    if (options.onIncomplete === "placeholder") {
+      console.warn(`[cimisy] ${missingGithubEnvMessage(resolution.missing)}`);
+      return unconfiguredSource({ missing: resolution.missing });
+    }
     throw new CimisyError(missingGithubEnvMessage(resolution.missing), "MISSING_GITHUB_CONFIG");
   }
 

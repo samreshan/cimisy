@@ -64,7 +64,7 @@ describe("scaffoldConfigFile", () => {
     const text = scaffoldConfigFile();
     assertNoSyntaxErrors(text);
     expect(text).toContain("collections: {}");
-    expect(text).toContain('resolveSourceFromEnv({ contentDir: "./content" })');
+    expect(text).toContain('resolveSourceFromEnv({ contentDir: "./content", onIncomplete: "placeholder" })');
     expect(text).toContain('from "cimisy/env"');
   });
 });

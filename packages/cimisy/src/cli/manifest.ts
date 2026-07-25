@@ -11,9 +11,9 @@
  *
  * Reference: GitHub Docs → "Registering a GitHub App from a manifest".
  */
+import { AUTH_CALLBACK_PATH } from "../shared/auth-callback-path.js";
 
-/** The path cimisy's API route handler serves the OAuth callback at, relative to an app origin. */
-export const AUTH_CALLBACK_PATH = "/api/cimisy/auth/callback";
+export { AUTH_CALLBACK_PATH } from "../shared/auth-callback-path.js";
 
 /** GitHub rejects App names longer than this. */
 export const MAX_APP_NAME_LENGTH = 34;
