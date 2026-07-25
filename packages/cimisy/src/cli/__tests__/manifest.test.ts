@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { AUTH_CALLBACK_PATH, buildAppManifest, manifestRegistrationUrl, MAX_APP_NAME_LENGTH, suggestAppName } from "../manifest.js";
+import {
+  AUTH_CALLBACK_PATH,
+  buildAppManifest,
+  callbackOriginVariants,
+  manifestRegistrationUrl,
+  MAX_APP_NAME_LENGTH,
+  suggestAppName,
+} from "../manifest.js";
 
 const REDIRECT = "http://127.0.0.1:51234/callback";
 
@@ -99,6 +106,34 @@ describe("buildAppManifest", () => {
     expect(trailing.callback_urls[0]).toBe(`https://my-site.vercel.app${AUTH_CALLBACK_PATH}`);
   });
 
+  it("registers the apex sibling when the production URL is a www. custom domain", () => {
+    const www = buildAppManifest({
+      appName: "cimisy-my-site",
+      repo: "acme/my-site",
+      productionOrigin: "https://www.samreshan.com.np",
+      redirectUrl: REDIRECT,
+    });
+    expect(www.callback_urls).toEqual([
+      `https://www.samreshan.com.np${AUTH_CALLBACK_PATH}`,
+      `https://samreshan.com.np${AUTH_CALLBACK_PATH}`,
+      `http://localhost:3000${AUTH_CALLBACK_PATH}`,
+    ]);
+  });
+
+  it("registers the www. sibling when the production URL is an apex custom domain", () => {
+    const apex = buildAppManifest({
+      appName: "cimisy-my-site",
+      repo: "acme/my-site",
+      productionOrigin: "https://example.com",
+      redirectUrl: REDIRECT,
+    });
+    expect(apex.callback_urls).toEqual([
+      `https://example.com${AUTH_CALLBACK_PATH}`,
+      `https://www.example.com${AUTH_CALLBACK_PATH}`,
+      `http://localhost:3000${AUTH_CALLBACK_PATH}`,
+    ]);
+  });
+
   it("de-duplicates when the production origin is localhost itself", () => {
     const same = buildAppManifest({
       appName: "cimisy-my-site",
@@ -108,6 +143,33 @@ describe("buildAppManifest", () => {
       redirectUrl: REDIRECT,
     });
     expect(same.callback_urls).toHaveLength(1);
+  });
+});
+
+describe("callbackOriginVariants", () => {
+  it("pairs a registrable domain with its www./apex sibling, in both directions", () => {
+    expect(callbackOriginVariants("https://example.com")).toEqual(["https://example.com", "https://www.example.com"]);
+    expect(callbackOriginVariants("https://www.example.com")).toEqual(["https://www.example.com", "https://example.com"]);
+    // Two-label public suffix: samreshan.com.np is an apex, not a subdomain of com.np.
+    expect(callbackOriginVariants("https://samreshan.com.np")).toEqual(["https://samreshan.com.np", "https://www.samreshan.com.np"]);
+  });
+
+  it("leaves multi-tenant platform hosts alone — www.<project>.vercel.app is nobody's site", () => {
+    expect(callbackOriginVariants("https://my-site.vercel.app")).toEqual(["https://my-site.vercel.app"]);
+    expect(callbackOriginVariants("https://www.acme.github.io")).toEqual(["https://www.acme.github.io"]);
+    expect(callbackOriginVariants("https://acme.pages.dev")).toEqual(["https://acme.pages.dev"]);
+  });
+
+  it("does not invent a sibling for a subdomain, localhost, or an IP", () => {
+    expect(callbackOriginVariants("https://blog.example.com")).toEqual(["https://blog.example.com"]);
+    expect(callbackOriginVariants("http://localhost:3000")).toEqual(["http://localhost:3000"]);
+    expect(callbackOriginVariants("https://127.0.0.1:3000")).toEqual(["https://127.0.0.1:3000"]);
+  });
+
+  it("keeps scheme, port and path-free origin form, and never widens past one label", () => {
+    expect(callbackOriginVariants("https://example.com:8443/")).toEqual(["https://example.com:8443", "https://www.example.com:8443"]);
+    // "www.app" would otherwise strip down to the bare TLD "app".
+    expect(callbackOriginVariants("https://www.app")).toEqual(["https://www.app"]);
   });
 });
 

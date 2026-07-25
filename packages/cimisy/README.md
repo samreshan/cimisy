@@ -121,7 +121,13 @@ It asks for the repo (`owner/repo`), whether that's a personal account or an org
 - offers to set it on Vercel for you if the project is already linked,
 - and finishes with a [`cimisy doctor`](#cimisy-doctor) checklist.
 
-Both your production callback URL and `http://localhost:3000/api/cimisy/auth/callback` are registered up front, so local sign-in works too without a second trip to GitHub.
+Callback URLs are registered up front, and the wizard prints the exact list before you confirm:
+
+- your production URL,
+- its `www.`/apex sibling when the production URL is a custom domain — `https://example.com` also registers `https://www.example.com`, and vice versa. GitHub matches `redirect_uri` byte-for-byte with no wildcards, so a site reached over the domain you *didn't* type would otherwise fail with "redirect_uri is not associated with this application". No sibling is invented for a subdomain (`blog.example.com`) or a platform host (`my-site.vercel.app`), where `www.` is not the same site,
+- and `http://localhost:3000/api/cimisy/auth/callback`, so local sign-in works too without a second trip to GitHub.
+
+A GitHub App's callback list is fixed when the App is created — GitHub has no API to edit it afterwards — so adding a domain later means a manual visit to **Settings → Developer settings → GitHub Apps → your app → Callback URL** (up to 10). The wizard also suggests setting `CIMISY_PUBLIC_URL` to your canonical origin, which pins the `redirect_uri` to that one value whichever domain a visitor arrived on.
 
 **The App must be owned by the same account that owns your content repo.** The wizard asks whether the owner is a personal account or an organization and registers the App in the right place, so this normally takes care of itself. If your repo lives in an org and you answer "personal account", the App will be created but you won't be able to install it on that repo. If you can't create Apps in the org, ask an owner to run the wizard, or to grant you the permission.
 
@@ -249,7 +255,7 @@ Other hosts are the same shape: `netlify env:set CIMISY_CONFIG "<value>"`, `fly 
 |---|---|
 | `/admin` shows a setup instructions page | The variable didn't reach this deployment. The page lists exactly which values are missing. Check it's scoped to the right environment, then **redeploy** — env vars only apply to a new build. |
 | Build fails with `SOURCE_UNCONFIGURED` | Same cause, but a public page prerenders content through `createReader`, so the build can't finish without a source. Set the variable and redeploy, or make that page dynamic — see [Environment variables](#environment-variables). |
-| GitHub says "redirect_uri is not associated with this application" | The URL you signed in from isn't a registered callback. See "Preview deployments" below. |
+| GitHub says "redirect_uri is not associated with this application" | The origin in that URL isn't one of the App's registered callbacks — most often a `www.` vs apex mismatch, or a domain added after the App was created. Add the exact URL from the error under **Settings → Developer settings → GitHub Apps → your app → Callback URL**, and set `CIMISY_PUBLIC_URL` to that origin so it can't drift again. For preview URLs, see "Preview deployments" below. |
 | Sign-in works, but you land on "pending" | Your GitHub collaborator permission on the content repo is below Admin/Maintain. See [RBAC guide](#rbac-guide). |
 
 Run `npx cimisy doctor` locally at any point to check the same configuration from your terminal.

@@ -10,7 +10,7 @@ import { parseRepoSpec } from "../shared/repo-spec.js";
 import { pathExists } from "../scan/config-detection.js";
 import { formatDoctorReport, loadProjectEnv, runDoctor } from "./doctor.js";
 import { gitignoreCoversEnvLocal, mergeEnvFile, parseEnvFile } from "./env-file.js";
-import { buildAppManifest, manifestRegistrationUrl, suggestAppName, MAX_APP_NAME_LENGTH } from "./manifest.js";
+import { AUTH_CALLBACK_PATH, buildAppManifest, manifestRegistrationUrl, suggestAppName, MAX_APP_NAME_LENGTH } from "./manifest.js";
 import { exchangeManifestCode, startManifestCallbackServer, type ManifestConversion } from "./manifest-flow.js";
 
 /**
@@ -232,12 +232,19 @@ export async function runSetupGithubCommand(options: SetupGithubOptions): Promis
   if (!productionOrigin) {
     clack.log.warn(
       "No production URL given, so only the localhost callback is registered. Before production sign-in works you'll need to " +
-        `add "<your-url>${"/api/cimisy/auth/callback"}" to the App's callback URLs on GitHub.`,
+        `add "<your-url>${AUTH_CALLBACK_PATH}" to the App's callback URLs on GitHub.`,
     );
   }
 
   // ── 2. Temp server + browser round trip ───────────────────────────────
   const registrationUrl = manifestRegistrationUrl({ org: accountKind === "org" ? owner : undefined });
+  const manifest = buildAppManifest({ appName: appNameAnswer.trim(), repo, productionOrigin, redirectUrl: "" });
+
+  // Callback URLs are fixed at creation: GitHub's API has no endpoint that
+  // edits an App after the manifest exchange, so anything missing here is a
+  // manual trip to the App's settings page later. Worth showing.
+  clack.log.info(["Callback URLs to be registered:", ...manifest.callback_urls.map((url) => `  ${url}`)].join("\n"));
+
   const server = await startManifestCallbackServer({
     registrationUrl,
     buildManifest: (redirectUrl) => buildAppManifest({ appName: appNameAnswer.trim(), repo, productionOrigin, redirectUrl }),
@@ -411,6 +418,21 @@ export async function runSetupGithubCommand(options: SetupGithubOptions): Promis
       `  Anywhere set ${CIMISY_ENV_VARS.config} to the value above — that one variable is the whole config.`,
     ].join("\n"),
   );
+  if (productionOrigin) {
+    // Without this, the origin the OAuth round trip uses is whatever the
+    // platform reports (Vercel's VERCEL_PROJECT_PRODUCTION_URL) or whatever
+    // host the request arrived on — which is how a site reached over `www.`
+    // ends up sending a `redirect_uri` nobody registered. Pinning it makes
+    // the value the same one that just went into the callback list.
+    clack.log.info(
+      [
+        "Recommended alongside it (optional but removes a whole class of sign-in failure):",
+        `  ${CIMISY_ENV_VARS.publicUrl}=${new URL(productionOrigin).origin}`,
+        "  Pins the OAuth redirect_uri to that exact origin, whichever domain the visitor arrived on.",
+      ].join("\n"),
+    );
+  }
+
   clack.log.info(
     `Then redeploy (env vars only take effect on a new build) and sign in at ${productionOrigin ? `${productionOrigin}/admin` : "<your-url>/admin"}.`,
   );
