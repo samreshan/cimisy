@@ -1,5 +1,53 @@
 # cimisy
 
+## 2.5.0
+
+### Minor Changes
+
+- 07eb317: Zero-friction GitHub setup: `cimisy setup github`, one-variable config, and `cimisy doctor`.
+
+  Pointing a cimisy deployment at GitHub used to take about thirty fiddly minutes: hand-register a GitHub App, tick three permission boxes, type a callback URL correctly, download a PEM and paste it into an environment field that mangles newlines, generate a client secret, invent a session secret, set seven variables, install the App, and hand-write a `resolveSource()` switch in `cimisy.config.ts` that every project reinvented slightly differently. Most of those steps failed silently.
+
+  **`npx cimisy setup github`** replaces the whole thing with one browser confirmation. It uses GitHub's official App Manifest flow: you're taken to a _pre-filled_ App creation page — permissions, callback URLs, and settings already chosen — and after you confirm and install it, the wizard writes `.env.local` (additively; your other keys are untouched, and a fresh file is created `0600`), waits until the App is really installed on the repo, verifies repository access, and prints **one** environment variable to paste into your deployment platform. It offers to set that variable on Vercel for you if the project is already linked, and finishes with a verification checklist.
+
+  **`CIMISY_CONFIG`** is that one variable: a single base64url line carrying the repo, branch, App id, private key, client id, client secret, and session secret. Nothing to transcribe, no multi-line PEM to mangle. It's a transport encoding, not encryption — exactly as sensitive as the seven variables it replaces — so treat it like the secret it is. The individual `CIMISY_*` variables still work; `CIMISY_CONFIG` takes precedence when both are set, and the two forms never merge.
+
+  **New `cimisy/env` subpath.** Consumer configs collapse to one call:
+
+  ```ts
+  import { resolveSourceFromEnv } from "cimisy/env";
+
+  export default config({
+    source: resolveSourceFromEnv({
+      contentDir: "./content",
+      onIncomplete: "placeholder",
+    }),
+    // ...collections unchanged
+  });
+  ```
+
+  Local disk when nothing is set, the GitHub adapter when it is. `onIncomplete: "placeholder"` (what `cimisy setup` now scaffolds) means a deployment that's missing some variables still _builds_: the API answers 503 naming exactly what's absent, and `/admin` renders a static page explaining what to set and what that deployment's callback URL is — instead of failing the build with a stack trace. The default stays `"throw"`, so fail-fast is still available.
+
+  **`npx cimisy doctor`** verifies a configuration before your users do: which source resolves and from which form, every required variable present, the session secret long enough, the private key parsed for real (the classic failure is a PEM whose newlines a dashboard ate — it still _looks_ like a PEM), App credentials accepted by GitHub, App installed on the repo, Contents and Pull-requests permissions actually _granted_ rather than merely requested, branch exists, collaborator lookup works, and both routes mounted. Each check prints a fix hint. `--json` for CI; exit 0/1/2.
+
+  No breaking changes — explicit `githubSource({ ... })` callers are unaffected, and the individual variable names are the ones cimisy's own error messages already referenced.
+
+### Patch Changes
+
+- fe5dcc1: Fixes for deploying to Vercel (and anything behind a proxy), plus two `.env.local` correctness bugs.
+
+  **A production deploy with no cimisy variables set no longer crashes the build.** Pushing to a host before running `npx cimisy setup github` leaves nothing configured, which resolves to the local adapter — and that adapter rightly refuses to run under `NODE_ENV=production`, but it did so by throwing at config import, failing the whole build with an error about an adapter you never chose. Under `onIncomplete: "placeholder"` that now becomes the unconfigured source instead: the guard rail is unchanged (the local adapter still never runs in production), but the deploy builds and `/admin` explains what to set. Note a public page that statically prerenders content through `createReader` still can't build without a source — it now fails with an error naming the missing variables and the command to fix them.
+
+  **Sign-in now works on Vercel preview deployments and behind `Host`-rewriting proxies.** The OAuth `redirect_uri` and the CSRF origin check were both derived from the URL the server saw. Every Vercel preview gets a unique hostname and GitHub Apps don't support wildcard callback URLs, so preview sign-in always failed with a redirect-URI mismatch. cimisy now resolves its public origin from `CIMISY_PUBLIC_URL`, else Vercel's `VERCEL_PROJECT_PRODUCTION_URL` (the stable production domain, picked up with no configuration), else the request's own origin as before. Only deployer-set configuration feeds this — never a request header, since the value gates the CSRF comparison.
+
+  **`cimisy setup github` no longer leaves a duplicate key that silently overrides what it just wrote.** `.env` files are last-one-wins, so a second assignment of a key below the one being updated meant the wizard reported success while the app kept loading the old credentials. Duplicates of keys being set are now removed, and reported in the CLI output rather than dropped silently.
+
+  **An unterminated quote in `.env.local` no longer hides every variable below it.** The parser treated the value as running to end-of-file, so `cimisy doctor` reported set variables as missing and the wizard rotated a session secret it should have reused (logging everyone out). Replacing such a key would also have deleted the lines beneath it.
+
+  **Hardened the wizard's browser-opening step.** The App install URL embeds a slug returned by GitHub's API and was passed to a process launcher — on Windows via `cmd /c start`, which parses its own command line, so a shell metacharacter surviving into that slug would have been command injection. The URL is now checked against an allowlist (only `https://github.com` and the wizard's own `http://127.0.0.1` server), the slug is percent-encoded, and Windows uses `rundll32 url.dll,FileProtocolHandler`, which takes the URL as a plain argument with no shell involved. Found by CodeQL.
+
+  The README's Vercel guide is rewritten around the two-command path, with a troubleshooting table, preview-deployment behavior, and a note that the GitHub App must be owned by the same account as the content repo.
+
 ## 2.4.3
 
 ### Patch Changes
