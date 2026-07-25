@@ -135,6 +135,13 @@ From the v2.3.0 audit (all confirmed in code, file references still valid):
 
 ## 2. `cimisy setup github` — App Manifest flow wizard
 
+> **Superseded by `plans/v2.5-github-setup-wizard.md` and shipped in v2.5.0.**
+> That plan expanded this sketch with the `cimisy/env` subpath, the
+> one-variable `CIMISY_CONFIG` blob, the `cimisy doctor` command, and the
+> unconfigured-deployment instructions page. The sequencing decision below
+> stands and the design notes are kept for provenance; the plan file is the
+> record of what was actually built.
+
 Decision already made with the user: **CLI wizard using GitHub's official App
 Manifest flow** (chosen over an in-admin guided setup and over a doctor-command-
 only approach). Today the setup is a manual README walkthrough with 7 env vars

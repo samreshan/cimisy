@@ -14,8 +14,10 @@ A git-based, security-first CMS that installs directly into an existing Next.js 
 ## Table of contents
 
 - [Quickstart (local adapter)](#quickstart-local-adapter)
-- [Using the GitHub adapter](#using-the-github-adapter)
-- [Setting up a GitHub App](#setting-up-a-github-app)
+- [Going to production (GitHub)](#going-to-production-github)
+- [Environment variables](#environment-variables)
+- [`cimisy doctor`](#cimisy-doctor)
+- [Deploying to Vercel](#deploying-to-vercel)
 - [Config reference](#config-reference)
 - [Pages, sections & singletons](#pages-sections--singletons)
 - [SEO](#seo)
@@ -27,6 +29,7 @@ A git-based, security-first CMS that installs directly into an existing Next.js 
 - [Security](#security)
 - [Scanning & importing existing content](#scanning--importing-existing-content)
 - [Migrating to / away from cimisy](#migrating-to--away-from-cimisy)
+- [Appendix: registering the App by hand](#appendix-registering-the-app-by-hand)
 
 ## Quickstart (local adapter)
 
@@ -42,10 +45,12 @@ Create `cimisy.config.ts` at your project root:
 
 ```ts
 import { blocks, collection, config, fields } from "cimisy/config";
-import { localSource } from "cimisy/adapters/local";
+import { resolveSourceFromEnv } from "cimisy/env";
 
 export default config({
-  source: localSource({ rootDir: "./content" }),
+  // Local disk in dev; the GitHub adapter in production. The switch is an
+  // environment variable, not a code change — see "Going to production".
+  source: resolveSourceFromEnv({ contentDir: "./content", onIncomplete: "placeholder" }),
 
   collections: {
     posts: collection({
@@ -98,58 +103,106 @@ export const { GET, POST, PUT, DELETE } = createCimisyHandler(cimisyConfig);
 
 Run your app and open `/admin` — create a post, and you'll see a real `.mdx` file appear under `./content/posts` with clean YAML frontmatter and MDX body.
 
-## Using the GitHub adapter
+## Going to production (GitHub)
 
-Swap `localSource` for `githubSource` to write real commits (and, for non-admin roles, real branches + pull requests) to a GitHub repo instead of local disk:
+In production cimisy writes to a GitHub repo instead of local disk: real commits for direct-publish roles, real branches and pull requests for everyone else. That needs a GitHub App registered against your own account or org — cimisy never runs a shared App on your behalf, since that App's private key is effectively a write key to every repo it's installed on, and centralizing that across every cimisy user would make the cimisy project itself a single point of compromise.
+
+Registering one used to be a fifteen-step walkthrough. Now:
+
+```sh
+npx cimisy setup github
+```
+
+It asks for the repo (`owner/repo`), whether that's a personal account or an org, and your production URL. Then it opens your browser once, on a **pre-filled** GitHub App confirmation page — permissions, callback URLs, and settings already chosen. You click Create, install the App on the repo, and the wizard:
+
+- writes `.env.local` (additively — your other keys are untouched), including a freshly generated session secret,
+- waits until the App is actually installed on the repo, then verifies it can read the repo and resolve collaborator permissions,
+- prints **one** environment variable, `CIMISY_CONFIG`, to paste into your deployment platform,
+- offers to set it on Vercel for you if the project is already linked,
+- and finishes with a [`cimisy doctor`](#cimisy-doctor) checklist.
+
+Both your production callback URL and `http://localhost:3000/api/cimisy/auth/callback` are registered up front, so local sign-in works too without a second trip to GitHub.
+
+Prefer to do it by hand, or on a machine with no browser? See [Appendix: registering the App by hand](#appendix-registering-the-app-by-hand).
+
+> `CIMISY_CONFIG` contains your App private key, client secret, and session secret. It's exactly as sensitive as the individual variables it replaces — paste it into a deployment platform's environment settings, never into an issue, a PR, or a chat.
+
+## Environment variables
+
+Your config file reads all of these through one call:
 
 ```ts
-import { githubSource } from "cimisy/adapters/github";
+import { resolveSourceFromEnv } from "cimisy/env";
 
 export default config({
-  source: githubSource({
-    repo: process.env.CIMISY_GITHUB_REPO!, // "owner/repo"
-    branch: process.env.CIMISY_GITHUB_BRANCH ?? "main",
-    appId: process.env.CIMISY_GITHUB_APP_ID!,
-    privateKey: process.env.CIMISY_GITHUB_APP_PRIVATE_KEY!,
-    clientId: process.env.CIMISY_GITHUB_APP_CLIENT_ID!,
-    clientSecret: process.env.CIMISY_GITHUB_APP_CLIENT_SECRET!,
-    sessionSecret: process.env.CIMISY_SESSION_SECRET!,
-  }),
+  source: resolveSourceFromEnv({ contentDir: "./content", onIncomplete: "placeholder" }),
   // ...collections unchanged
 });
 ```
 
-This needs a GitHub App registered against your own account/org — cimisy never runs a shared App on your behalf, since that App's private key is effectively a write key to every repo it's installed on, and centralizing that across every cimisy user would make the cimisy project itself a single point of compromise. See the next section.
+With nothing set, that resolves to the local adapter rooted at `contentDir` — so the same file works in dev with no credentials at all. There are two ways to point it at GitHub.
 
-A typical `NODE_ENV`-based switch, so local dev still uses the zero-setup local adapter:
+**The one-variable form** (what the wizard prints):
 
-```ts
-source:
-  process.env.NODE_ENV === "development"
-    ? localSource({ rootDir: "./content" })
-    : githubSource({ /* ... */ }),
+| Variable | Notes |
+|---|---|
+| `CIMISY_CONFIG` | base64url blob carrying every value in the table below. Setting it selects the GitHub source on its own — no `CIMISY_SOURCE` needed. |
+
+**The individual variables:**
+
+| Variable | Required | Notes |
+|---|---|---|
+| `CIMISY_SOURCE` | yes | Set to `github` to opt in. Anything else (or unset) means the local adapter. |
+| `CIMISY_GITHUB_REPO` | yes | `owner/repo` |
+| `CIMISY_GITHUB_BRANCH` | no | Defaults to `main` |
+| `CIMISY_GITHUB_APP_ID` | yes | |
+| `CIMISY_GITHUB_APP_PRIVATE_KEY` | yes | PEM. Real newlines or `\n`-escaped on one line — cimisy normalizes either. |
+| `CIMISY_GITHUB_APP_CLIENT_ID` | yes | |
+| `CIMISY_GITHUB_APP_CLIENT_SECRET` | yes | |
+| `CIMISY_SESSION_SECRET` | yes | ≥32 characters; signs the admin session cookie |
+| `CIMISY_ALLOW_LOCAL_PROD` | no | `true` lets the local adapter run under `NODE_ENV=production`. Only for a controlled internal tool with its own access control in front. |
+
+`CIMISY_CONFIG` wins if both forms are set, and the two never merge — it's all-or-nothing, so there's always one answer to "which value is live?". cimisy logs a one-line warning when it finds both.
+
+**`onIncomplete`** decides what happens when `CIMISY_SOURCE=github` but some variables are missing:
+
+- `"throw"` (default) — the config throws at import, which fails the build. Fail-fast, if that's what you want.
+- `"placeholder"` — the app still builds, the API answers `503` naming the missing variables, and `/admin` renders a page explaining exactly what to set and what this deployment's callback URL is. This is what `cimisy setup` scaffolds, because the person who hits this state is usually mid-deploy and needs to be told what's missing.
+
+A malformed `CIMISY_CONFIG` throws under either setting — corrupt isn't the same as incomplete.
+
+One caveat worth knowing before you rely on `"placeholder"`: it keeps the *app* building, but it can't invent content. If a public page statically prerenders content through [`createReader`](#reading-content-on-your-site), that page's build-time read still fails — there's no source to read from, and quietly prerendering an empty page would ship a silently-wrong site. Either make those routes dynamic (`export const dynamic = "force-dynamic"`) so they render per request once the variables land, or set `CIMISY_CONFIG` before the build that needs them. The `/admin` route and the API handler are unaffected: they're dynamic by nature and degrade to the instructions page and `503` respectively.
+
+Explicit `githubSource({ ... })` calls still work exactly as before; `cimisy/env` is additive.
+
+## `cimisy doctor`
+
+```sh
+npx cimisy doctor          # human-readable checklist
+npx cimisy doctor --json   # machine-readable, for CI
 ```
 
-## Setting up a GitHub App
+Answers "is this actually configured, and will it work?" before your users do. It checks, each with a fix hint:
 
-1. **Pick a repo.** It needs at least one commit already (an empty repo has no branch/ref for the adapter to read).
-2. **Register the App** — GitHub → Settings → Developer settings → GitHub Apps → New GitHub App (use your org's settings instead of your personal ones for an org-owned repo).
-   - **Homepage URL**: your app's URL (`http://localhost:3000` for local dev)
-   - **Callback URL**: `<your-app-url>/api/cimisy/auth/callback`
-   - **Webhook**: uncheck "Active" — not required
-   - **Repository permissions**: Contents → **Read and write**, Pull requests → **Read and write** (Metadata read-only is checked automatically)
-   - **Where can this GitHub App be installed?**: "Only on this account" is simplest to start
-3. **Collect credentials** from the App's settings page:
-   - App ID → `CIMISY_GITHUB_APP_ID`
-   - Client ID → `CIMISY_GITHUB_APP_CLIENT_ID`
-   - Client secrets → Generate new → `CIMISY_GITHUB_APP_CLIENT_SECRET`
-   - Private keys → Generate a private key → paste the downloaded `.pem`'s full contents into `CIMISY_GITHUB_APP_PRIVATE_KEY` (real newlines or literal `\n` both work — cimisy normalizes either form)
-4. **Install the App** on your repo from the App's settings page ("Install App" in the sidebar).
-5. **Set a session secret**: `CIMISY_SESSION_SECRET`, any long random string (`openssl rand -base64 32`).
+1. **Environment** — which source resolves and from which form, every required variable present, session secret long enough, and the private key parsed for real (the classic failure is a PEM whose newlines a hosting dashboard ate, which still *looks* like a PEM).
+2. **GitHub App auth** — App JWT accepted, installation found on the repo.
+3. **Repository** — Contents and Pull-requests permissions actually *granted* (the App requests them; whoever installs it can decline), the branch exists, collaborator-permission lookup works.
+4. **Project wiring** — `cimisy.config` present, admin page and API route mounted.
+5. **Rate limiting** — warns (never fails) when no shared store is configured, since the default limiter is per-instance and on serverless that quietly means no effective limit.
 
-Once installed, what a signed-in user can do depends on their GitHub **collaborator permission level on that repo** (not just "are they signed in"): Admin/Maintain publish directly, Write drafts via branch + PR, Read/Triage are read-only, and non-collaborators are rejected even with a valid GitHub identity. See [RBAC guide](#rbac-guide) to customize this mapping.
+Exit code is `0` when everything passes, `1` if any check failed, `2` on CLI misuse. It reads `.env` and `.env.local` the way Next.js does, so it sees what your dev server sees.
 
-A complete runnable example (including the `.env.local` template) lives at [`examples/next-github`](https://github.com/samreshan/cimisy/tree/main/examples/next-github) in the repo.
+## Deploying to Vercel
+
+1. `npx cimisy setup github` on your machine. Accept the offer to set `CIMISY_CONFIG` for you, or copy the line it prints into **Project → Settings → Environment Variables**.
+2. Redeploy — environment variables only take effect on a new build.
+3. Open `https://your-app.vercel.app/admin` and sign in with GitHub.
+
+That's the whole list; `CIMISY_CONFIG` is the only cimisy variable you need. Other platforms are the same shape — e.g. `netlify env:set CIMISY_CONFIG "<value>"`, or whatever your host calls environment settings.
+
+If `/admin` shows an instructions page instead of the CMS, the variable didn't reach that deployment — the page lists exactly which values are missing. Run `npx cimisy doctor` locally to check the same configuration from your terminal.
+
+One production note that isn't about setup: the default rate limiter is in-memory, which doesn't hold across serverless instances. Pass your own `rateLimiter` backed by shared storage for anything beyond small single-instance deployments — see [Security](#security).
 
 ## Config reference
 
@@ -159,7 +212,7 @@ The top-level config object, from `cimisy/config`.
 
 | Option | Type | Required | Notes |
 |---|---|---|---|
-| `source` | `StorageAdapter` | yes | `localSource(...)` or `githubSource(...)` |
+| `source` | `StorageAdapter` | yes | usually `resolveSourceFromEnv({ contentDir })` from `cimisy/env` — see [Environment variables](#environment-variables). `localSource(...)` / `githubSource(...)` explicitly also work |
 | `collections` | `Record<string, CollectionDefinition>` | no | top-level collections, see below |
 | `singletons` | `Record<string, SingletonDefinition>` | no | single fixed-path documents (e.g. site settings) — see [Pages, sections & singletons](#pages-sections--singletons) |
 | `pages` | `Record<string, PageDefinition>` | no | page → section/collection hierarchy — see [Pages, sections & singletons](#pages-sections--singletons) |
@@ -484,6 +537,31 @@ Refused (reported as "not import-eligible", never silently mangled): metadata co
 **Into cimisy:** point a collection's `path` at your existing MDX files (adjust their frontmatter to match your `schema`) — there's no transform step because cimisy doesn't use a proprietary storage format to begin with. For content that's hardcoded in your components rather than already in files, use [`cimisy scan` / `cimisy import`](#scanning--importing-existing-content).
 
 **Away from cimisy:** delete the two route files (`app/(cimisy)/admin/...`, `app/api/cimisy/...`) and `cimisy.config.ts`. What's left in your repo is plain MDX files with YAML frontmatter and a normal Next.js app — there is no export step, because content was never stored anywhere other than your own repository in a human-readable format.
+
+## Appendix: registering the App by hand
+
+`npx cimisy setup github` does all of this for you — this is here for the cases it can't cover (no browser on the machine, an existing App you want to reuse, or you'd simply rather see every setting).
+
+1. **Pick a repo.** It needs at least one commit already (an empty repo has no branch/ref for the adapter to read).
+2. **Register the App** — GitHub → Settings → Developer settings → GitHub Apps → New GitHub App (use your org's settings instead of your personal ones for an org-owned repo).
+   - **Homepage URL**: your app's URL (`http://localhost:3000` for local dev)
+   - **Callback URL**: `<your-app-url>/api/cimisy/auth/callback` — add `http://localhost:3000/api/cimisy/auth/callback` as a second one while you're here, so local sign-in works too
+   - **Request user authorization (OAuth) during installation**: check it
+   - **Webhook**: uncheck "Active" — not required
+   - **Repository permissions**: Contents → **Read and write**, Pull requests → **Read and write**, Organization → Members → **Read-only** (Metadata read-only is checked automatically)
+   - **Where can this GitHub App be installed?**: "Only on this account"
+3. **Collect credentials** from the App's settings page:
+   - App ID → `CIMISY_GITHUB_APP_ID`
+   - Client ID → `CIMISY_GITHUB_APP_CLIENT_ID`
+   - Client secrets → Generate new → `CIMISY_GITHUB_APP_CLIENT_SECRET`
+   - Private keys → Generate a private key → paste the downloaded `.pem`'s full contents into `CIMISY_GITHUB_APP_PRIVATE_KEY` (real newlines or literal `\n` both work — cimisy normalizes either form)
+4. **Install the App** on your repo from the App's settings page ("Install App" in the sidebar).
+5. **Set a session secret**: `CIMISY_SESSION_SECRET`, any long random string (`openssl rand -base64 32`).
+6. **Set `CIMISY_SOURCE=github`** and `CIMISY_GITHUB_REPO=owner/repo`, then run `npx cimisy doctor` to confirm all of the above landed correctly.
+
+Once installed, what a signed-in user can do depends on their GitHub **collaborator permission level on that repo** (not just "are they signed in"): Admin/Maintain publish directly, Write drafts via branch + PR, Read/Triage are read-only, and non-collaborators are rejected even with a valid GitHub identity. See [RBAC guide](#rbac-guide) to customize this mapping.
+
+A complete runnable example (including the `.env.local` template) lives at [`examples/next-github`](https://github.com/samreshan/cimisy/tree/main/examples/next-github) in the repo.
 
 ## License
 

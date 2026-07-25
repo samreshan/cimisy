@@ -9,6 +9,8 @@ cimisy installs directly into a Next.js app and holds write credentials to the a
 | GitHub App private key | `CIMISY_GITHUB_APP_PRIVATE_KEY` env var, server-only | Signs App-level JWTs; compromise = full write access to every repo the App is installed on |
 | GitHub App client secret | `CIMISY_GITHUB_APP_CLIENT_SECRET` env var, server-only | Used only for OAuth code exchange |
 | Session secret | `CIMISY_SESSION_SECRET` env var, server-only | Signs the session cookie (HS256) |
+| One-variable config blob | `CIMISY_CONFIG` env var, server-only | base64url (not encrypted) JSON carrying all three secrets above — same blast radius, fewer places to leak from. See scenario 16 |
+| App Manifest code | Process memory during `cimisy setup github`, never persisted | Single-use, 1-hour expiry; redeemable without authentication for the App's private key and client secret. See scenario 17 |
 | Installation access tokens | Minted per-request, never persisted, never sent to the browser | Short-lived (~1h), scoped to the App's installation |
 | Session cookies | Browser, httpOnly | Carries identity only (GitHub user id/login/name/email) — never a GitHub token, never a role (role is always re-derived server-side) |
 | Repository content | The consuming app's own git repo | The actual CMS content — this is what the whole system exists to protect the integrity of |
@@ -83,6 +85,37 @@ The dev-only scan surface (`POST /scan`, `GET /scan/report`, `POST /scan/import`
 
 ### 15. Supply chain
 **Mitigation:** Dependencies are pinned via a committed lockfile. JWT construction and installation-token exchange are delegated to `@octokit/auth-app` rather than hand-rolled — reusing a well-audited, widely-used library for exactly the kind of code where a subtle bug is catastrophic. CI dependency scanning and CodeQL are described in the repo's `.github/workflows/`.
+
+### 16. `CIMISY_CONFIG` — one variable carrying every secret
+Before v2.5 a GitHub-backed deployment needed seven environment variables, one of them a multi-line PEM. `CIMISY_CONFIG` packs all of them into a single base64url line (`src/env/blob.ts`).
+**This does not widen the blast radius**, and it's worth being precise about why: the blob is a *transport encoding*, not encryption, and anyone who can read it could equally have read the seven variables it replaces. What changes is the number of places a secret can be mishandled — one dashboard field instead of seven, no multi-line PEM to mangle, nothing to transcribe. The historical failure mode here was a private key pasted into the wrong field, or into a public repo, precisely because it was awkward to handle.
+**Mitigations:**
+- **Never echoed on failure.** Every rejection path in `decodeCimisyConfigBlob` reports the *shape* of the problem (not base64url / not JSON / unsupported version / missing field names) and never the blob, a slice of it, or any decoded value — so a malformed blob in a CI log or a pasted bug report leaks nothing. Enforced by an explicit test.
+- **One deliberate print, clearly labeled.** The wizard prints the blob exactly once, at the handoff step, preceded by a blank line and a warning naming what it contains and where not to paste it. That print is the whole point of the variable existing; everything else in the wizard is silent about secret values.
+- **Version-stamped.** `v: 1` is required, so a future field change is recognized (`UNSUPPORTED_CONFIG_BLOB_VERSION`) rather than silently misread by an older cimisy.
+- **Unknown keys dropped.** The decoder rebuilds the options object field by field, so a tampered blob carrying extra keys can't smuggle them into `githubSource(...)`.
+- **All-or-nothing precedence.** `CIMISY_CONFIG` wins outright over the individual variables and the two forms never merge (`src/env/read-env.ts`), with a warning when both are present. A half-blob/half-vars configuration would make "which credential is actually live?" unanswerable from a dashboard, which is exactly the state a stale leftover variable creates.
+**Verified by:** `src/env/__tests__/blob.test.ts` (round trip, truncated/tampered/wrong-version/unversioned blobs, the never-echo-contents assertion) and `resolve-source.test.ts` (precedence, no merging, warning content contains no secret).
+
+### 17. The setup wizard's localhost callback server and manifest exchange
+`cimisy setup github` (`src/cli/manifest-flow.ts`) briefly runs an HTTP server on the developer's machine that receives, from a browser, a one-time code redeemable — *without any authentication* — for a GitHub App's private key and client secret. That is a genuinely new trust boundary: a local HTTP listener holding the landing spot for a credential-bearing redirect.
+**Mitigations (layered):**
+- **Loopback bind only.** `listen(0, "127.0.0.1")` — never `0.0.0.0`, which would expose the callback to the local network for the life of the wizard.
+- **Unguessable state, compared in constant time.** 32 random bytes generated per run, echoed back by GitHub, verified with `timingSafeEqual` (`statesMatch`). A mismatch rejects the run outright and never redeems the code, so another process on the machine can't drive a code into the wizard's exchange.
+- **Exactly one callback.** The first callback settles the run; any replay gets a 410 and is not processed. Any path other than `/` and `/callback` is a 404.
+- **Immediate shutdown.** The listener is torn down the moment the code lands or the run fails, not when the caller remembers to close it. A 10-minute hard timeout aborts an abandoned run with a clean message.
+- **The code is never persisted or logged.** It exists only as a local variable, is dropped as soon as it's redeemed, and appears in no error message — including the failure path, where GitHub's own message is surfaced but the code is not. The manifest is HTML-attribute-escaped into the auto-submitting form so nothing in it can break out of the attribute.
+- **Received credentials go only to `.env.local`.** The PEM and client secret exist in process memory and in that file, which is created `0600` on POSIX; the wizard checks `.gitignore` covers it and offers to fix it if not, failing closed (an unrecognized ignore pattern is reported as *not* covered, since a false "ignored" is how a private key reaches a public repo).
+- **No secret reaches argv.** The Vercel fast path pipes `CIMISY_CONFIG` over the child process's stdin, never as a command-line argument, which would put it in shell history and in every process listing on the machine.
+- **The App it creates is minimal.** Private (installable only on the owning account), no webhook declared at all, and exactly three permissions — Contents: write, Pull requests: write, Members: read. The manifest builder is snapshot-tested so widening that set has to be a deliberate, reviewed change.
+**Verified by:** `src/cli/__tests__/manifest-flow.test.ts` (loopback binding, state match/mismatch, missing code, single-use replay, 404 on other paths, clean timeout, no code in the error message) and `manifest.test.ts` (permission set and callback URLs, exact).
+
+### 18. Unconfigured production deployments
+`resolveSourceFromEnv({ onIncomplete: "placeholder" })` lets a deployment missing its GitHub variables build and serve rather than throwing at config import. The risk to check is that a "degraded" mode never becomes an *unauthenticated* mode.
+**Mitigation:** the placeholder source (`src/storage/unconfigured.ts`) has no credentials and no storage — every read/list/write throws a typed `SOURCE_UNCONFIGURED` error, so there is nothing to serve and nothing to write. Every API route returns 503 before any handler logic runs. The `/admin` page it renders is deliberately inert: no inputs, no form, no client script, no state — a README rendered in place, not the in-admin credential wizard the project decided against, which on a necessarily-unauthenticated page would be a public "paste your private key" form. It shows only non-secrets: the missing variable *names*, the callback URL derived from the request origin, and the commands to run.
+
+**Scope limit (not a mitigation, a documented boundary):** the placeholder keeps the app building, but a public page that *statically prerenders* content through `createReader` still fails its build-time read. That is deliberate — prerendering an empty page instead would ship a silently-wrong site, which is a worse failure than a loud one. Documented in the README's "Environment variables" section.
+**Verified by:** `src/next/__tests__/unconfigured-routes.test.ts` (503 across every method and route, missing names present, no stack trace in the body), `unconfigured-page.test.tsx` (asserts the page contains no `<input>`, `<form>`, `<script>`, or `<button>`), and `src/storage/__tests__/unconfigured.test.ts`.
 
 ## Accepted risks / explicitly out of scope for v1
 
