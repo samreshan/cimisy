@@ -367,11 +367,20 @@ async function checkProjectWiring(projectRoot: string, mode: DoctorReport["mode"
     // this reports which adapter the config *wires*, not the result of
     // loading it.
     const detection = detectSource(await readFile(configFilePath, "utf8"), configFilePath);
+    // An env-driven config isn't "local" — it's whatever the environment
+    // selects, which the env checks above already reported. Saying "local"
+    // here would contradict them on a correctly-configured GitHub deploy.
+    const sourceDescription =
+      detection.kind !== "local"
+        ? detection.kind
+        : detection.envDriven
+          ? `resolveSourceFromEnv, content in ${detection.rootDir}`
+          : `local, ${detection.rootDir}`;
     checks.push({
       id: "project.config",
       label: "cimisy.config found",
       status: "pass",
-      detail: `${path.relative(projectRoot, configFilePath)} (source: ${detection.kind === "local" ? `local, ${detection.rootDir}` : detection.kind})`,
+      detail: `${path.relative(projectRoot, configFilePath)} (source: ${sourceDescription})`,
     });
 
     // A config that calls githubSource(...) directly throws at *import*

@@ -3,7 +3,11 @@ import path from "node:path";
 import ts from "typescript";
 import { isScanMode, type ScanMode } from "./modes.js";
 
-export type SourceDetection = { kind: "local"; rootDir: string } | { kind: "github" } | { kind: "unknown" };
+export type SourceDetection =
+  /** `envDriven` marks a `resolveSourceFromEnv({ contentDir })` config: it resolves to the local adapter rooted at `rootDir` under the CLI's own environment (which is what the import codemod needs), but the deployed adapter is whatever the environment selects. Callers that report to a human should say so rather than claiming the config is local. */
+  | { kind: "local"; rootDir: string; envDriven?: boolean }
+  | { kind: "github" }
+  | { kind: "unknown" };
 
 /** `process.env.NODE_ENV` accessed via plain dot notation — the only shape the README's own recommended switch uses. */
 function isNodeEnvAccess(node: ts.Expression): boolean {
@@ -91,7 +95,12 @@ export function detectSource(configText: string, configFilePath: string): Source
             prop.name.text === dirOption &&
             ts.isStringLiteralLike(prop.initializer)
           ) {
-            detection = { kind: "local", rootDir: prop.initializer.text };
+            // Only set when true, so a plain localSource detection keeps
+            // the exact shape callers have always compared against.
+            detection =
+              dirOption === "contentDir"
+                ? { kind: "local", rootDir: prop.initializer.text, envDriven: true }
+                : { kind: "local", rootDir: prop.initializer.text };
           }
         }
         return;
