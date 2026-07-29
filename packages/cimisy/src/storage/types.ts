@@ -24,8 +24,17 @@ export interface ChangeRequest {
    * Optimistic-concurrency check: the version the writer last read. If `ref`
    * has moved past this in the meantime, the adapter must reject the write
    * with a `conflict` result rather than silently overwriting it.
+   *
+   * Scalar form applies one expected version to every touched path — fine
+   * for the single-file writes the admin issues, and for multi-file writes
+   * that only CREATE files (all expectations are null). The map form is
+   * per-path (`path → expected version`, a path absent from the map is
+   * expected not to exist) and is REQUIRED for any change that writes or
+   * deletes more than one pre-existing file: each file has its own version
+   * token, so a single scalar can never match them all. Adapters resolve
+   * either form through expectedBaseVersion().
    */
-  baseVersion: string | null;
+  baseVersion: string | null | Record<string, string | null>;
   message: string;
   author: ChangeAuthor;
   /**
@@ -40,6 +49,12 @@ export interface ChangeRequest {
    */
   writes: Array<{ path: string; content: string; encoding?: "utf-8" | "base64" }>;
   deletes?: string[];
+}
+
+/** Resolves the expected version for one touched path from either baseVersion form — the one place that logic lives, so the two adapters can't drift. */
+export function expectedBaseVersion(baseVersion: ChangeRequest["baseVersion"], path: string): string | null {
+  if (baseVersion === null || typeof baseVersion === "string") return baseVersion;
+  return baseVersion[path] ?? null;
 }
 
 export interface ChangeResult {
