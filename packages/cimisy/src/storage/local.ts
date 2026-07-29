@@ -3,13 +3,14 @@ import type { Dirent } from "node:fs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { CimisyError, UnsafePathError } from "../shared/errors.js";
-import type {
-  ChangeRequest,
-  ChangeResult,
-  FileMeta,
-  FileRecord,
-  RawFileRecord,
-  StorageAdapter,
+import {
+  expectedBaseVersion,
+  type ChangeRequest,
+  type ChangeResult,
+  type FileMeta,
+  type FileRecord,
+  type RawFileRecord,
+  type StorageAdapter,
 } from "./types.js";
 
 export interface LocalSourceOptions {
@@ -125,10 +126,11 @@ export class LocalStorageAdapter implements StorageAdapter {
     for (const path of touchedPaths) {
       const current = await this.read(path);
       const currentVersion = current?.version ?? null;
-      if (currentVersion !== change.baseVersion) {
+      const expected = expectedBaseVersion(change.baseVersion, path);
+      if (currentVersion !== expected) {
         return {
           version: currentVersion ?? "",
-          conflict: { path, expected: change.baseVersion, actual: currentVersion ?? "" },
+          conflict: { path, expected, actual: currentVersion ?? "" },
         };
       }
     }

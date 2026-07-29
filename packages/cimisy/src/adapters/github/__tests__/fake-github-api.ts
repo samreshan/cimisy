@@ -19,6 +19,8 @@ export interface FakeGithubApi {
   filesOnBranch(branch: string): Map<string, string>;
   /** Directly commits a file to the default branch, outside of any adapter call — for seeding fixture state (e.g. a pre-existing .cimisy/users.yaml) before a test exercises the real read/write path. */
   seedFile(path: string, content: string): void;
+  /** Marks a seeded path as "over the Contents API's 1 MB cap": its GET /contents response carries `content: ""` + `encoding: "none"` (what the real API does for >1 MB blobs), forcing readers onto the Blobs API. */
+  markLargeFile(path: string): void;
   /** Directly opens an already-existing open PR, outside of any adapter call — for seeding drafts-listing fixture state without exercising the full branch+PR creation flow. */
   seedPullRequest(input: { head: string; base: string; title: string; authorLogin: string }): { number: number; url: string };
   install(): void;
@@ -38,6 +40,7 @@ export function createFakeGithubApi(options: {
   const defaultBranch = options.defaultBranch ?? "main";
   const collaboratorPermissions = new Map<string, string>();
   const requests: Array<{ method: string; url: string }> = [];
+  const largeFilePaths = new Set<string>();
 
   const branches = new Map<string, string>(); // branch name -> head commit sha
   const commits = new Map<
@@ -162,10 +165,18 @@ export function createFakeGithubApi(options: {
         // The real Contents API always returns base64 regardless of the
         // blob's original encoding — mirror that here.
         const base64Content = blob.encoding === "base64" ? blob.content : Buffer.from(blob.content, "utf8").toString("base64");
+        // Real behavior for blobs over 1 MB: HTTP 200 with content "" and
+        // encoding "none" — NOT an error. The size field is what lets a
+        // caller distinguish "empty file" from "content withheld".
+        const size = Buffer.from(base64Content.replace(/\n/g, ""), "base64").length;
+        if (largeFilePaths.has(requestedPath)) {
+          return json({ type: "file", path: requestedPath, content: "", encoding: "none", size, sha: blobSha(blob.content) });
+        }
         return json({
           type: "file",
           path: requestedPath,
           content: base64Content,
+          size,
           sha: blobSha(blob.content),
         });
       }
@@ -178,6 +189,41 @@ export function createFakeGithubApi(options: {
     }
 
     // --- Git Data API ---
+    // GET /git/trees/{tree_sha} where tree_sha is a "{ref}:{path}"
+    // expression — resolves a subtree in one request, which is what the
+    // adapter's list() uses (the Contents API caps directory listings at
+    // 1,000 entries; the Trees API doesn't). Entry paths are relative to
+    // the requested subtree, exactly like the real API.
+    const treeGetMatch = /^\/repos\/[^/]+\/[^/]+\/git\/trees\/(.+)$/.exec(path);
+    if (method === "GET" && treeGetMatch) {
+      const expression = treeGetMatch[1]!;
+      const colon = expression.indexOf(":");
+      if (colon === -1) return notFound();
+      const ref = expression.slice(0, colon);
+      const subPath = expression.slice(colon + 1);
+      const blobs = blobsOnBranch(ref);
+      if (blobs.size === 0) return notFound();
+      const prefix = subPath.length > 0 ? `${subPath}/` : "";
+      const entries: Array<{ path: string; type: "blob" | "tree"; sha: string }> = [];
+      const seenDirs = new Set<string>();
+      for (const [filePath, blob] of blobs) {
+        if (!filePath.startsWith(prefix)) continue;
+        const rest = filePath.slice(prefix.length);
+        const slash = rest.indexOf("/");
+        if (slash === -1) {
+          entries.push({ path: rest, type: "blob", sha: blobSha(blob.content) });
+        } else {
+          const dir = rest.slice(0, slash);
+          if (!seenDirs.has(dir)) {
+            seenDirs.add(dir);
+            entries.push({ path: dir, type: "tree", sha: `subtree-${dir}` });
+          }
+        }
+      }
+      if (entries.length === 0) return notFound();
+      return json({ sha: `tree-of-${expression}`, tree: entries, truncated: false });
+    }
+
     const refMatch = /^\/repos\/[^/]+\/[^/]+\/git\/ref\/heads\/(.+)$/.exec(path);
     if (method === "GET" && refMatch) {
       const branch = refMatch[1]!;
@@ -211,14 +257,39 @@ export function createFakeGithubApi(options: {
       return json({ sha }, 201);
     }
 
+    // GET /git/blobs/{sha} — the Blobs API read path (good to 100 MB where
+    // the Contents API caps at 1 MB). Always returns base64, like the real API.
+    const blobGetMatch = /^\/repos\/[^/]+\/[^/]+\/git\/blobs\/(.+)$/.exec(path);
+    if (method === "GET" && blobGetMatch) {
+      const blob = blobStore.get(blobGetMatch[1]!);
+      if (!blob) return notFound();
+      const base64Content = blob.encoding === "base64" ? blob.content : Buffer.from(blob.content, "utf8").toString("base64");
+      return json({ sha: blobGetMatch[1], content: base64Content, encoding: "base64" });
+    }
+
     if (method === "POST" && path === `/repos/${options.owner}/${options.repo}/git/trees`) {
       const baseTree = body.base_tree as string | undefined;
       const baseEntries = baseTree ? (trees.get(baseTree) ?? []) : [];
-      const newEntries = body.tree as Array<{ path: string; sha: string | null }>;
+      // Entries arrive with either a pre-created blob `sha` (base64/binary
+      // writes), inline `content` (GitHub writes the blob out itself —
+      // mirror that here), or `sha: null` (delete).
+      const rawEntries = body.tree as Array<{ path: string; sha?: string | null; content?: string }>;
+      const newEntries = rawEntries.map((entry) => {
+        if (entry.content !== undefined) {
+          const sha = blobSha(entry.content);
+          blobStore.set(sha, { content: entry.content, encoding: "utf-8" });
+          return { path: entry.path, sha };
+        }
+        return { path: entry.path, sha: entry.sha ?? null };
+      });
       const merged = [...baseEntries.filter((e) => !newEntries.some((n) => n.path === e.path)), ...newEntries];
       const sha = `tree-${treeCounter++}`;
       trees.set(sha, merged);
-      return json({ sha }, 201);
+      // The real API's response includes the created tree's entries (with
+      // resolved blob SHAs) — the adapter reads the inline-content blob
+      // SHAs from here, since they never passed through POST /git/blobs.
+      const responseTree = merged.filter((e) => e.sha !== null).map((e) => ({ path: e.path, sha: e.sha, type: "blob" }));
+      return json({ sha, tree: responseTree }, 201);
     }
 
     if (method === "POST" && path === `/repos/${options.owner}/${options.repo}/git/commits`) {
@@ -363,6 +434,9 @@ export function createFakeGithubApi(options: {
         authorId: 0,
       });
       branches.set(defaultBranch, newCommitSha);
+    },
+    markLargeFile(path) {
+      largeFilePaths.add(path);
     },
     seedPullRequest({ head, base, title, authorLogin }) {
       const number = prCounter++;

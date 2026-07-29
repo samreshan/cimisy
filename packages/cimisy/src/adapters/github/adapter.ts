@@ -5,16 +5,17 @@ import { CimisyError } from "../../shared/errors.js";
 import { CIMISY_ENV_VARS, GITHUB_CREDENTIAL_ENV_VARS, missingGithubCredentialsMessage, type GithubCredentialKey } from "../../shared/github-env.js";
 import { parseRepoSpec } from "../../shared/repo-spec.js";
 import { assertSafeRepoPath } from "../../shared/slug.js";
-import type {
-  ChangeRequest,
-  ChangeRequestSummary,
-  ChangeResult,
-  FileMeta,
-  FileRecord,
-  HistoryEntry,
-  OpenChangeRequestInput,
-  RawFileRecord,
-  StorageAdapter,
+import {
+  expectedBaseVersion,
+  type ChangeRequest,
+  type ChangeRequestSummary,
+  type ChangeResult,
+  type FileMeta,
+  type FileRecord,
+  type HistoryEntry,
+  type OpenChangeRequestInput,
+  type RawFileRecord,
+  type StorageAdapter,
 } from "../../storage/types.js";
 
 export interface GithubSourceOptions extends GithubAppCredentials {
@@ -111,7 +112,8 @@ export class GithubStorageAdapter implements StorageAdapter {
         ref: ref ?? this.defaultBranch,
       });
       if (Array.isArray(data) || data.type !== "file" || data.content === undefined) return null;
-      return { path, content: decodeBase64Content(data.content), version: data.sha };
+      const base64 = await this.resolveContentBase64(octokit, path, data);
+      return { path, content: decodeBase64Content(base64), version: data.sha };
     } catch (err) {
       if (isNotFound(err)) return null;
       throw err;
@@ -130,25 +132,66 @@ export class GithubStorageAdapter implements StorageAdapter {
         ref: ref ?? this.defaultBranch,
       });
       if (Array.isArray(data) || data.type !== "file" || data.content === undefined) return null;
-      return { content: Buffer.from(data.content.replace(/\n/g, ""), "base64") };
+      const base64 = await this.resolveContentBase64(octokit, path, data);
+      return { content: Buffer.from(base64.replace(/\n/g, ""), "base64") };
     } catch (err) {
       if (isNotFound(err)) return null;
       throw err;
     }
   }
 
+  /**
+   * The Contents API silently returns `content: ""` (with `encoding:
+   * "none"`) for blobs over 1 MB — NOT an error. Before this guard, a
+   * >1 MB YAML singleton parsed as an empty document, rendered as an
+   * all-defaults form, and the next save overwrote the real file with
+   * defaults. Fall back to the Blobs API (good to 100 MB) and fail closed
+   * — an empty body for a non-empty blob is never treated as content.
+   */
+  private async resolveContentBase64(
+    octokit: Octokit,
+    path: string,
+    data: { content: string; sha: string; size: number },
+  ): Promise<string> {
+    if (data.content !== "" || data.size === 0) return data.content;
+    const { data: blob } = await octokit.rest.git.getBlob({
+      owner: this.owner,
+      repo: this.repoName,
+      file_sha: data.sha,
+    });
+    if (blob.content === "") {
+      throw new CimisyError(
+        `GitHub returned no content for "${path}" (${data.size} bytes, blob ${data.sha}) — refusing to treat a non-empty file as empty.`,
+        "GITHUB_CONTENT_UNAVAILABLE",
+      );
+    }
+    return blob.content;
+  }
+
+  /**
+   * Uses the Git Trees API rather than the Contents API: Contents caps a
+   * directory listing at 1,000 files WITHOUT pagination or an error, so a
+   * collection's 1,001st entry silently didn't exist. A tree fetch has no
+   * such cap (its limits are 100k entries / 7 MB per subtree). The
+   * `{ref}:{path}` expression resolves the subtree in one request; blob
+   * SHAs are identical to the Contents API's `sha`, so version tokens are
+   * unchanged.
+   */
   async list(dirPrefix: string, ref?: string): Promise<FileMeta[]> {
     assertSafeRepoPath(dirPrefix);
     const octokit = await this.getClient();
     try {
-      const { data } = await octokit.rest.repos.getContent({
+      const { data } = await octokit.rest.git.getTree({
         owner: this.owner,
         repo: this.repoName,
-        path: dirPrefix,
-        ref: ref ?? this.defaultBranch,
+        tree_sha: `${ref ?? this.defaultBranch}:${dirPrefix}`,
       });
-      if (!Array.isArray(data)) return [];
-      return data.filter((entry) => entry.type === "file").map((entry) => ({ path: entry.path, version: entry.sha }));
+      const files: FileMeta[] = [];
+      for (const entry of data.tree) {
+        if (entry.type !== "blob" || typeof entry.path !== "string" || typeof entry.sha !== "string") continue;
+        files.push({ path: `${dirPrefix}/${entry.path}`, version: entry.sha });
+      }
+      return files;
     } catch (err) {
       if (isNotFound(err)) return [];
       throw err;
@@ -164,13 +207,26 @@ export class GithubStorageAdapter implements StorageAdapter {
 
     // Per-file optimistic-concurrency check — same semantics as the local
     // adapter, so callers see identical conflict behavior regardless of
-    // which adapter is configured.
+    // which adapter is configured. Resolved from ONE tree listing per
+    // touched directory rather than one Contents read per file: a listing
+    // yields every touched path's current blob SHA at once, and a path
+    // absent from its directory's listing is "file doesn't exist"
+    // (current version null) — exactly what read() would have reported.
     const touchedPaths = [...change.writes.map((w) => w.path), ...(change.deletes ?? [])];
+    const currentVersions = new Map<string, string>();
+    for (const dir of new Set(touchedPaths.map(parentDirectory))) {
+      if (dir === null) continue; // repo-root file: no directory to list, checked below
+      for (const meta of await this.list(dir, ref)) currentVersions.set(meta.path, meta.version);
+    }
     for (const path of touchedPaths) {
-      const current = await this.read(path, ref);
-      const currentVersion = current?.version ?? null;
-      if (currentVersion !== change.baseVersion) {
-        return { version: currentVersion ?? "", conflict: { path, expected: change.baseVersion, actual: currentVersion ?? "" } };
+      // Repo-root paths (no parent directory) fall back to a direct read.
+      const currentVersion =
+        parentDirectory(path) === null
+          ? ((await this.read(path, ref))?.version ?? null)
+          : (currentVersions.get(path) ?? null);
+      const expected = expectedBaseVersion(change.baseVersion, path);
+      if (currentVersion !== expected) {
+        return { version: currentVersion ?? "", conflict: { path, expected, actual: currentVersion ?? "" } };
       }
     }
 
@@ -179,17 +235,25 @@ export class GithubStorageAdapter implements StorageAdapter {
     const { data: baseCommit } = await octokit.rest.git.getCommit({ owner: this.owner, repo: this.repoName, commit_sha: baseCommitSha });
     const baseTreeSha = baseCommit.tree.sha;
 
-    const treeEntries: Array<{ path: string; mode: "100644"; type: "blob"; sha: string | null }> = [];
-    let lastBlobSha = "";
+    // Text content is inlined into createTree — GitHub writes the blob out
+    // as part of tree creation, turning a K-file commit from 2K+5 requests
+    // into a flat 5. That also matters for GitHub's content-creation rate
+    // limit (80/min, 500/hr), which the old one-createBlob-per-file loop
+    // burned K times faster. Only base64 (binary media) writes still need
+    // an explicit blob: createTree's inline `content` is utf-8 only.
+    const treeEntries: Array<{ path: string; mode: "100644"; type: "blob"; sha?: string | null; content?: string }> = [];
     for (const write of change.writes) {
-      const { data: blob } = await octokit.rest.git.createBlob({
-        owner: this.owner,
-        repo: this.repoName,
-        content: write.content,
-        encoding: write.encoding ?? "utf-8",
-      });
-      lastBlobSha = blob.sha;
-      treeEntries.push({ path: write.path, mode: "100644", type: "blob", sha: blob.sha });
+      if ((write.encoding ?? "utf-8") === "base64") {
+        const { data: blob } = await octokit.rest.git.createBlob({
+          owner: this.owner,
+          repo: this.repoName,
+          content: write.content,
+          encoding: "base64",
+        });
+        treeEntries.push({ path: write.path, mode: "100644", type: "blob", sha: blob.sha });
+      } else {
+        treeEntries.push({ path: write.path, mode: "100644", type: "blob", content: write.content });
+      }
     }
     for (const path of change.deletes ?? []) {
       treeEntries.push({ path, mode: "100644", type: "blob", sha: null });
@@ -201,6 +265,12 @@ export class GithubStorageAdapter implements StorageAdapter {
       base_tree: baseTreeSha,
       tree: treeEntries,
     });
+
+    // The version token for the last write comes from the created tree's
+    // response entries (inline-content blobs never pass through
+    // createBlob, so the response is the only place their SHA appears).
+    const lastWritePath = change.writes.at(-1)?.path;
+    const lastBlobSha = lastWritePath ? (newTree.tree.find((entry) => entry.path === lastWritePath)?.sha ?? "") : "";
 
     const { data: newCommit } = await octokit.rest.git.createCommit({
       owner: this.owner,
@@ -228,7 +298,11 @@ export class GithubStorageAdapter implements StorageAdapter {
         const actual = conflictPath ? await this.read(conflictPath, ref) : null;
         return {
           version: actual?.version ?? "",
-          conflict: { path: conflictPath, expected: change.baseVersion, actual: actual?.version ?? "" },
+          conflict: {
+            path: conflictPath,
+            expected: expectedBaseVersion(change.baseVersion, conflictPath),
+            actual: actual?.version ?? "",
+          },
         };
       }
       throw err;
@@ -330,6 +404,12 @@ export class GithubStorageAdapter implements StorageAdapter {
       date: commit.commit.author?.date ?? "",
     }));
   }
+}
+
+/** "content/posts/hello.mdx" → "content/posts"; null for a repo-root path (nothing to list). */
+function parentDirectory(path: string): string | null {
+  const idx = path.lastIndexOf("/");
+  return idx === -1 ? null : path.slice(0, idx);
 }
 
 function isNotFound(err: unknown): boolean {

@@ -292,4 +292,127 @@ describe("GithubStorageAdapter", () => {
     });
     await expect(uninstalledAdapter.read("posts/x.mdx")).rejects.toThrow(/installed/i);
   });
+
+  // --- v2.5.2 regressions ---
+
+  it("list() goes through the Git Trees API, not the Contents API (which silently caps directories at 1,000 files)", async () => {
+    fake.seedFile("posts/second.mdx", "---\ntitle: Second\n---\n\nMore.");
+    const files = await adapter.list("posts");
+    expect(files.map((f) => f.path).sort()).toEqual(["posts/existing.mdx", "posts/second.mdx"]);
+    const listRequests = fake.requests.filter((r) => r.method === "GET" && r.url.includes("/git/trees/"));
+    expect(listRequests.length).toBeGreaterThan(0);
+    expect(fake.requests.some((r) => r.method === "GET" && decodeURIComponent(r.url).includes("/contents/posts"))).toBe(false);
+  });
+
+  it("list() only returns files directly in the directory, not entries of nested subdirectories", async () => {
+    fake.seedFile("posts/drafts/nested.mdx", "---\ntitle: Nested\n---\n\nHidden.");
+    const files = await adapter.list("posts");
+    expect(files.map((f) => f.path)).toEqual(["posts/existing.mdx"]);
+  });
+
+  it("commitChange with a per-path baseVersion map updates two pre-existing files in one atomic commit", async () => {
+    fake.seedFile("posts/other.mdx", "---\ntitle: Other\n---\n\nOriginal other.");
+    const a = await adapter.read("posts/existing.mdx");
+    const b = await adapter.read("posts/other.mdx");
+    // The two files have different blob SHAs, so no single scalar could
+    // match both — the exact case that motivated the map form.
+    expect(a!.version).not.toBe(b!.version);
+    const result = await adapter.commitChange({
+      ref: "main",
+      baseVersion: { "posts/existing.mdx": a!.version, "posts/other.mdx": b!.version },
+      message: "bulk update",
+      author: AUTHOR,
+      writes: [
+        { path: "posts/existing.mdx", content: "rewritten A" },
+        { path: "posts/other.mdx", content: "rewritten B" },
+      ],
+    });
+    expect(result.conflict).toBeUndefined();
+    expect((await adapter.read("posts/existing.mdx"))?.content).toBe("rewritten A");
+    expect((await adapter.read("posts/other.mdx"))?.content).toBe("rewritten B");
+  });
+
+  it("commitChange with a per-path map still conflicts when one path's expected version is stale", async () => {
+    fake.seedFile("posts/other.mdx", "---\ntitle: Other\n---\n\nOriginal other.");
+    const a = await adapter.read("posts/existing.mdx");
+    const result = await adapter.commitChange({
+      ref: "main",
+      baseVersion: { "posts/existing.mdx": a!.version, "posts/other.mdx": "stale-sha" },
+      message: "bulk update",
+      author: AUTHOR,
+      writes: [
+        { path: "posts/existing.mdx", content: "rewritten A" },
+        { path: "posts/other.mdx", content: "rewritten B" },
+      ],
+    });
+    expect(result.conflict?.path).toBe("posts/other.mdx");
+    expect(result.conflict?.expected).toBe("stale-sha");
+    // Atomic: NEITHER file changed, including the one whose version matched.
+    expect((await adapter.read("posts/existing.mdx"))?.content).toBe("---\ntitle: Existing\n---\n\nHello.");
+  });
+
+  it("a path absent from the baseVersion map is expected not to exist (create), and conflicts if it already does", async () => {
+    const result = await adapter.commitChange({
+      ref: "main",
+      baseVersion: {},
+      message: "create over existing",
+      author: AUTHOR,
+      writes: [{ path: "posts/existing.mdx", content: "clobber attempt" }],
+    });
+    expect(result.conflict?.path).toBe("posts/existing.mdx");
+    expect(result.conflict?.expected).toBeNull();
+  });
+
+  it("utf-8 writes are inlined into createTree — no POST /git/blobs — and the returned version matches a subsequent read", async () => {
+    const before = fake.requests.length;
+    const result = await adapter.commitChange({
+      ref: "main",
+      baseVersion: null,
+      message: "create",
+      author: AUTHOR,
+      writes: [
+        { path: "posts/one.mdx", content: "one" },
+        { path: "posts/two.mdx", content: "two" },
+      ],
+    });
+    const blobPosts = fake.requests.slice(before).filter((r) => r.method === "POST" && r.url.endsWith("/git/blobs"));
+    expect(blobPosts).toHaveLength(0);
+    // The version token must agree with what read() reports, or the very
+    // next save would false-conflict.
+    expect((await adapter.read("posts/two.mdx"))?.version).toBe(result.version);
+  });
+
+  it("base64 (binary) writes still go through POST /git/blobs — createTree's inline content is utf-8 only", async () => {
+    const before = fake.requests.length;
+    await adapter.commitChange({
+      ref: "main",
+      baseVersion: null,
+      message: "upload",
+      author: AUTHOR,
+      writes: [{ path: "public/uploads/pixel.png", content: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64"), encoding: "base64" }],
+    });
+    const blobPosts = fake.requests.slice(before).filter((r) => r.method === "POST" && r.url.endsWith("/git/blobs"));
+    expect(blobPosts).toHaveLength(1);
+    const raw = await adapter.readRaw("public/uploads/pixel.png");
+    expect([...raw!.content.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  it("read() falls back to the Blobs API when the Contents API withholds content (>1 MB behavior) instead of returning an empty file", async () => {
+    fake.seedFile("content/settings.yaml", "title: Real settings\n");
+    fake.markLargeFile("content/settings.yaml");
+    const record = await adapter.read("content/settings.yaml");
+    // Before this fix, record.content was "" — which a YAML singleton
+    // parsed as an all-defaults document, and the next save overwrote the
+    // real file. Fail-open turned into data loss.
+    expect(record?.content).toBe("title: Real settings\n");
+    expect(fake.requests.some((r) => r.method === "GET" && r.url.includes("/git/blobs/"))).toBe(true);
+  });
+
+  it("readRaw falls back to the Blobs API the same way (>1 MB media no longer decodes to zero bytes)", async () => {
+    fake.seedFile("public/uploads/big.bin", "binary-stand-in-content");
+    fake.markLargeFile("public/uploads/big.bin");
+    const raw = await adapter.readRaw("public/uploads/big.bin");
+    expect(raw?.content.length).toBeGreaterThan(0);
+    expect(Buffer.from(raw!.content).toString("utf8")).toBe("binary-stand-in-content");
+  });
 });
