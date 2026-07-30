@@ -89,7 +89,7 @@
     "@octokit/rest": "^22.0.1",
     "@tiptap/core": "^3.28.0",
     "@tiptap/extension-link": "^3.28.0",
-    "@tiptap/extension-placeholder": "^3.28.0",
+    "@tiptap/extension-placeholder": "^3.29.1",
     "@tiptap/pm": "^3.28.0",
     "@tiptap/react": "^3.28.0",
     "@tiptap/starter-kit": "^3.28.0",
